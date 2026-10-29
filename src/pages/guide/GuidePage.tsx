@@ -23,6 +23,7 @@ export default function GuidePage() {
             <li><strong>Make it yours.</strong> Select an element to edit position, dimensions, fill, and text properties. Double-click text or a button, or choose Edit text, to edit its plain text. Done or leaving the field commits the draft; Escape cancels it.</li>
             <li><strong>Bring things into balance.</strong> Use layers to select and reorder. Shift-click elements or layers for multiple selection. Alignment uses the artboard for one element and the selection bounds for multiple elements. Local guides and layout assistance work offline.</li>
           </ol>
+          <p>Choose <strong>System, Light, or Dark</strong> for the interface. Your theme choice does not change the canvas colors or exported design.</p>
           <p className="page-callout">A box is one element, not a container. Headline text is a styled paragraph, not a semantic heading. This editor builds flat compositions, not nested page structures.</p>
         </section>
 
@@ -71,10 +72,10 @@ export default function GuidePage() {
           <h2 id="page-ai-heading">Your canvas.<br />Your decision.</h2>
         </div>
         <div>
-          <p>Local editing, layout tools, and saving do not need an AI provider. AI assistance is optional and requires server-side configuration; credentials do not belong in your project or browser settings.</p>
-          <p>An explicit request sends your current layout and direction to the configured provider. If you opt into automatic assistance, settled edits can also send requests. Provider usage may cost money. Avoid including sensitive content you do not want to share.</p>
-          <p>Suggestions change your document only when you choose <strong>Accept</strong>. Automatic assistance starts off, is session-scoped, and switches off when you leave the editor. Returning does not turn it back on.</p>
-          <p className="page-small">A configured provider is not a guarantee of connectivity or available quota. If assistance is unavailable, you can keep working locally—there are no fabricated AI results.</p>
+          <p>Local editing, layout tools, and saving do not need AI. For optional assistance, configure <code>OPENAI_API_KEY</code> on the server. <code>OPENAI_MODEL</code> defaults to <code>gpt-5.4</code>; an optional <code>OPENAI_BASE_URL</code> must support OpenAI-compatible Chat Completions with image input and strict structured output. Keep credentials out of browser settings and project files.</p>
+          <p>Describe your revision direction and optionally attach a PNG, JPEG, or WebP reference, up to 5 MiB. References are normalized to JPEG at at most 1600 pixels on the longest edge. A request sends your current canvas image, layout, direction, and attached reference to the provider. Attachments stay in the session, not in saves or exports.</p>
+          <p>Review the suggestion’s preview and rationale, then <strong>Accept</strong> or <strong>Dismiss</strong>. Only Accept changes your document; you can undo it. Live AI starts off, is session-scoped, and switches off when you leave the editor. If you opt in, settled edits can also send requests.</p>
+          <p className="page-small">Provider usage may cost money. Avoid sending sensitive content. Configuration does not guarantee connectivity or quota; if assistance fails, your canvas stays unchanged and you can keep working locally.</p>
         </div>
       </section>
 

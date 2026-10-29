@@ -10,10 +10,12 @@ import { handleRequestError } from './errors';
 
 const internalMessage = 'The server could not complete the request. Please try again.';
 const unsupportedMessage = 'Unsupported request body charset or encoding. Send UTF-8 JSON with a supported content encoding.';
+const tooLargeMessage = 'Request is too large (maximum 8 MiB including images and project JSON).';
+const bodyLimit = 8 * 1024 * 1024;
 
 test('request errors retain safe consumer-visible HTTP statuses and bodies', async (t) => {
   const app = express();
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({ limit: '8mb' }));
   app.post('/body', (req, res) => { res.json({ ok: req.body?.accepted === true }); });
   app.get('/unexpected', () => { throw new Error('private server detail'); });
   app.get('/unexpected-status', () => { throw Object.assign(new Error('private server detail'), { status: 400 }); });
@@ -44,9 +46,10 @@ test('request errors retain safe consumer-visible HTTP statuses and bodies', asy
   await listening;
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
+  const oversizedBody = JSON.stringify({ data: 'x'.repeat(bodyLimit) });
   const cases: { name: string; headers: Record<string, string>; body: string | Uint8Array<ArrayBuffer>; status: number; error: string }[] = [
     { name: 'malformed JSON', headers: { 'content-type': 'application/json' }, body: '{', status: 400, error: 'Invalid request body.' },
-    { name: 'oversized JSON', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ data: 'x'.repeat(1024 * 1024) }), status: 413, error: 'Project is too large (maximum 1 MB).' },
+    { name: 'oversized JSON', headers: { 'content-type': 'application/json' }, body: oversizedBody, status: 413, error: tooLargeMessage },
     { name: 'unsupported charset', headers: { 'content-type': 'application/json; charset=made-up' }, body: '{}', status: 415, error: unsupportedMessage },
     { name: 'unsupported encoding', headers: { 'content-type': 'application/json', 'content-encoding': 'made-up' }, body: '{}', status: 415, error: unsupportedMessage },
   ];
@@ -63,8 +66,8 @@ test('request errors retain safe consumer-visible HTTP statuses and bodies', asy
       { name: `truncated ${encoding} stream`, headers, body: compressed.subarray(0, compressed.length - 1), status: 400, error: 'Invalid request body.' },
       {
         name: `oversized decompressed ${encoding} body`, headers,
-        body: new Uint8Array(compress(JSON.stringify({ data: 'x'.repeat(1024 * 1024) }))),
-        status: 413, error: 'Project is too large (maximum 1 MB).',
+        body: new Uint8Array(compress(oversizedBody)),
+        status: 413, error: tooLargeMessage,
       },
     );
   }
@@ -93,6 +96,14 @@ test('request errors retain safe consumer-visible HTTP statuses and bodies', asy
   }
   await t.test('valid JSON remains successful', async () => {
     const response = await fetch(`${base}/body`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"accepted":true}' });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true });
+  });
+  await t.test('JSON up to the 8 MiB boundary permits two bounded images plus project data', async () => {
+    const emptyBody = JSON.stringify({ accepted: true, data: '' });
+    const body = JSON.stringify({ accepted: true, data: 'x'.repeat(bodyLimit - Buffer.byteLength(emptyBody)) });
+    assert.equal(Buffer.byteLength(body), bodyLimit);
+    const response = await fetch(`${base}/body`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { ok: true });
   });

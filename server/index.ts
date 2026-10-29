@@ -27,7 +27,7 @@ app.use((req, res, next) => {
   }
   next();
 });
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '8mb' }));
 app.get('/api/health', (_req, res) => {
   const config = aiConfiguration();
   res.json({
@@ -47,7 +47,7 @@ app.post('/api/suggest', async (req, res) => {
   const cancelDisconnectedRequest = () => { if (!res.writableEnded) controller.abort(); };
   res.on('close', cancelDisconnectedRequest);
   try {
-    const suggestion = await suggest(input.project, input.instruction, controller.signal);
+    const suggestion = await suggest(input.project, input.instruction, controller.signal, input);
     if (!controller.signal.aborted) res.json({ suggestion });
   } catch (error) {
     if (controller.signal.aborted) return;

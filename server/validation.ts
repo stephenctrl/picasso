@@ -50,7 +50,52 @@ export function parseSuggestion(value: unknown): Suggestion {
   if (!elements.length) throw new Error('The AI returned an empty design.');
   return { title: text(s.title, 120, 'suggestion title'), rationale: text(s.rationale, 2000, 'suggestion rationale'), elements };
 }
-export function parseRequest(value: unknown): { project: Project; instruction: string } {
+export interface SuggestionImages {
+  canvasImage?: string;
+  referenceImage?: string;
+}
+
+const maxImageBytes = 2 * 1024 * 1024;
+const imageSignatures = {
+  png: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  jpeg: Buffer.from([0xff, 0xd8, 0xff]),
+};
+
+function image(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  const invalid = () => new Error(`Invalid ${label}. Send a PNG, JPEG or WebP base64 data URL.`);
+  if (typeof value !== 'string') throw invalid();
+  const match = /^data:image\/(png|jpeg|webp);base64,/.exec(value);
+  if (!match) throw invalid();
+  const encoded = value.slice(match[0].length);
+  if (encoded.length > Math.ceil(maxImageBytes / 3) * 4) {
+    throw new Error(`${label} is too large (maximum 2 MiB per image).`);
+  }
+  if (!encoded.length || encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(encoded)) throw invalid();
+  const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0;
+  const decodedBytes = encoded.length / 4 * 3 - padding;
+  if (decodedBytes > maxImageBytes) throw new Error(`${label} is too large (maximum 2 MiB per image).`);
+  // Buffer's decoder is permissive; require canonical padding bits before decoding.
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  if (padding && (alphabet.indexOf(encoded[encoded.length - padding - 1]) & (padding === 2 ? 15 : 3)) !== 0) throw invalid();
+  const bytes = Buffer.from(encoded, 'base64');
+  const signatureMatches = match[1] === 'png'
+    ? bytes.subarray(0, 8).equals(imageSignatures.png)
+    : match[1] === 'jpeg'
+      ? bytes.subarray(0, 3).equals(imageSignatures.jpeg)
+      : bytes.length >= 12 && bytes.toString('latin1', 0, 4) === 'RIFF'
+        && bytes.toString('latin1', 8, 12) === 'WEBP' && bytes.readUInt32LE(4) === bytes.length - 8;
+  if (!signatureMatches) throw invalid();
+  return value;
+}
+
+export function parseRequest(value: unknown): { project: Project; instruction: string } & SuggestionImages {
   const request = object(value);
-  return { project: parseProject(request.project), instruction: text(request.instruction, 2000, 'AI direction') };
+  const canvasImage = image(request.canvasImage, 'Canvas image');
+  const referenceImage = image(request.referenceImage, 'Reference image');
+  return {
+    project: parseProject(request.project), instruction: text(request.instruction, 2000, 'AI direction'),
+    ...(canvasImage === undefined ? {} : { canvasImage }),
+    ...(referenceImage === undefined ? {} : { referenceImage }),
+  };
 }

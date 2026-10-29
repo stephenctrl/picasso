@@ -6,6 +6,7 @@ import { clamp, componentPresets, createPreset, initialProject, isPresetId } fro
 import type { PresetId } from '../../document';
 import { parseProject, parseSuggestion } from '../../validation';
 import { download, projectSvg } from '../../export';
+import { projectImage, referenceImage } from '../../aiImage';
 import { applyLayout, getAlignmentGuides } from '../../layout';
 import type { AlignmentGuide, LayoutAction } from '../../layout';
 import { elementTag, elementStyles, projectCode } from '../../render';
@@ -112,6 +113,12 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
   const [health, setHealth] = useState<Health>({ state: 'checking', model: '' });
   const healthControllerRef = useRef<AbortController | null>(null);
   const [instruction, setInstruction] = useState('');
+  const [reference, setReference] = useState<{ name: string; image: string } | null>(null);
+  const referenceRef = useRef(reference);
+  const referenceInputRef = useRef<HTMLInputElement>(null);
+  const referenceControllerRef = useRef<AbortController | null>(null);
+  const [referenceLoading, setReferenceLoading] = useState(false);
+  const [referenceError, setReferenceError] = useState('');
   const [aiStatus, setAIStatus] = useState<'idle' | 'requesting' | 'preview' | 'error'>('idle');
   const [aiMessage, setAIMessage] = useState('');
   const [aiSlow, setAISlow] = useState(false);
@@ -168,7 +175,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
 
   function scheduleAutoSuggestion() {
     clearAutoSchedule();
-    if (!activeRef.current || !autoEnabledRef.current || autoPausedRef.current || healthRef.current.state !== 'configured' || gestureRef.current || textDraftRef.current) return;
+    if (!activeRef.current || !autoEnabledRef.current || autoPausedRef.current || healthRef.current.state !== 'configured' || gestureRef.current || textDraftRef.current || referenceControllerRef.current) return;
     const revision = revisionRef.current;
     eligibleRevisionRef.current = revision;
     const cadenceWait = lastAutoStartRef.current === null ? 0 : 15000 - (performance.now() - lastAutoStartRef.current);
@@ -209,6 +216,43 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
     setAIStatus('idle');
     setShowOriginal(false);
     setAIMessage(message);
+  }
+
+  function clearReference() {
+    referenceControllerRef.current?.abort();
+    referenceControllerRef.current = null;
+    referenceRef.current = null;
+    setReference(null);
+    setReferenceLoading(false);
+    setReferenceError('');
+    if (referenceInputRef.current) referenceInputRef.current.value = '';
+    invalidateAI('Reference design removed. Request a fresh suggestion to use the canvas alone.');
+  }
+
+  async function attachReference(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    clearReference();
+    const controller = new AbortController();
+    referenceControllerRef.current = controller;
+    setReferenceLoading(true);
+    try {
+      const image = await referenceImage(file, controller.signal);
+      if (referenceControllerRef.current !== controller) return;
+      const next = { name: file.name, image };
+      referenceRef.current = next;
+      setReference(next);
+      setAIMessage('Reference design attached. Add a revision direction, then request a suggestion.');
+    } catch (error) {
+      if (referenceControllerRef.current !== controller || controller.signal.aborted) return;
+      setReferenceError(error instanceof Error ? error.message : 'The reference design could not be read. Choose a PNG, JPEG or WebP image.');
+    } finally {
+      if (referenceControllerRef.current === controller) {
+        referenceControllerRef.current = null;
+        setReferenceLoading(false);
+      }
+    }
   }
 
   function publish(next: Project, switchingDocument = false) {
@@ -471,6 +515,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
   function replaceDocument(next: Project) {
     resolveDrafts();
     setCopyRecovery(null);
+    clearReference();
     dragPresetRef.current = null;
     setDragOver(false);
     gestureRef.current = null;
@@ -504,6 +549,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
   useEffect(() => {
     if (active) return;
     importIdRef.current += 1;
+    if (referenceControllerRef.current) clearReference();
     if (gestureRef.current) finishGesture(true);
     resolveDrafts();
     toggleAutomatic(false);
@@ -728,6 +774,8 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
       window.removeEventListener('hashchange', invalidateImportOnNavigation);
       importIdRef.current += 1;
       copyIdRef.current += 1;
+      referenceControllerRef.current?.abort();
+      referenceControllerRef.current = null;
       if (autoTimerRef.current !== null) window.clearTimeout(autoTimerRef.current);
       autoTimerRef.current = null;
       eligibleRevisionRef.current = null;
@@ -747,7 +795,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
   }, [aiStatus]);
 
   async function requestSuggestion(kind: 'manual' | 'automatic' = 'manual') {
-    if (!activeRef.current || requestControllerRef.current || healthRef.current.state !== 'configured' || gestureRef.current) return;
+    if (!activeRef.current || requestControllerRef.current || referenceControllerRef.current || healthRef.current.state !== 'configured' || gestureRef.current) return;
     if (kind === 'automatic' && (!autoEnabledRef.current || autoPausedRef.current || textDraftRef.current)) return;
     if (kind === 'manual') resolveDrafts();
     invalidateAI();
@@ -756,17 +804,24 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
     const controller = new AbortController();
     const requestId = requestIdRef.current;
     const revision = revisionRef.current;
+    const requestProject = projectRef.current;
+    const direction = instructionRef.current;
+    const attachedImage = referenceRef.current?.image;
     requestControllerRef.current = controller;
     requestKindRef.current = kind;
     setAIStatus('requesting');
     let timedOut = false;
     const timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, 55000);
-    let failureMessage = 'The AI service could not complete this request. Check the local server and provider configuration, then retry manually.';
+    let failureMessage = 'The canvas image could not be prepared. Your design is unchanged. Try again in a browser with canvas support.';
     let responseReceived = false;
     try {
+      const canvasImage = await projectImage(requestProject, controller.signal);
+      if (requestIdRef.current !== requestId || revisionRef.current !== revision) return;
+      controller.signal.throwIfAborted();
+      failureMessage = 'The AI service could not complete this request. Check the local server and provider configuration, then retry manually.';
       const response = await fetch('/api/suggest', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project: projectRef.current, instruction: instructionRef.current }), signal: controller.signal,
+        body: JSON.stringify({ project: requestProject, instruction: direction, canvasImage, referenceImage: attachedImage }), signal: controller.signal,
       });
       responseReceived = true;
       failureMessage = 'The AI service returned an unreadable response. Your design is unchanged. Retry manually to request a complete design.';
@@ -862,14 +917,21 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
           <div className="ai-availability" role="status">
             {health.state === 'checking' && <span>Checking local AI configuration…</span>}
             {health.state === 'configured' && <span>Configured · {health.model}<br />Provider access is checked only when you request a suggestion.</span>}
-            {health.state === 'unconfigured' && <span>{health.message || 'AI isn’t configured yet. Set GEMINI_API_KEY in the server’s .env file and restart the server.'} Your editor still works.</span>}
+            {health.state === 'unconfigured' && <span>{health.message || 'AI isn’t configured yet. Set OPENAI_API_KEY in the server’s .env file and restart the server.'} Your editor still works.</span>}
             {health.state === 'unavailable' && <span>{health.message} Your editor still works.</span>}
             <button className="health-refresh" aria-label="Check local AI configuration again" title="Check local configuration; no provider request" disabled={health.state === 'checking' || aiStatus === 'requesting'} onClick={() => void checkHealth()}><RefreshCw size={12} /></button>
           </div>
           <>
-            <label className="ai-direction"><span>What would you like to explore? <small>Optional</small></span><textarea value={instruction} onChange={event => setInstruction(event.target.value)} maxLength={2000} rows={2} placeholder="A calmer palette, a bolder headline…" /></label>
-            <p className="ai-disclosure">Requesting sends your current layout and direction to the configured AI provider. Nothing changes until you accept.</p>
-            <button className="ai-request-button" onClick={() => void requestSuggestion()} disabled={health.state !== 'configured' || aiStatus === 'requesting'} aria-busy={aiStatus === 'requesting'} aria-describedby={aiStatus === 'requesting' ? 'ai-request-progress' : undefined}>
+            <label className="ai-direction"><span>Revision direction <small>Optional</small></span><textarea value={instruction} onChange={event => setInstruction(event.target.value)} maxLength={2000} rows={2} placeholder="Keep the branding; improve contrast and align the call to action…" /></label>
+            <div className="ai-reference">
+              <label className="ai-direction"><span>Reference design <small>Optional</small></span><input ref={referenceInputRef} type="file" accept="image/png,image/jpeg,image/webp" aria-label="Reference design" aria-describedby="ai-reference-help" onChange={event => void attachReference(event)} /></label>
+              <p id="ai-reference-help" className="ai-disclosure">PNG, JPEG or WebP · up to 5 MiB. Resized to 1,600px; session-only, never saved or exported.</p>
+              {referenceLoading && <p className="ai-progress" role="status">Preparing the reference image… <button className="ai-cancel" onClick={clearReference}>Cancel attachment</button></p>}
+              {reference && <div className="ai-reference-preview"><img src={reference.image} alt="Attached reference design" /><span>{reference.name}</span><button className="ai-cancel" onClick={clearReference}>Remove reference</button></div>}
+              {referenceError && <p className="ai-feedback error" role="alert">{referenceError}</p>}
+            </div>
+            <p className="ai-disclosure">Requesting sends a canvas image, editable layout, revision direction and any attached reference to the configured AI provider. Nothing changes until you accept.</p>
+            <button className="ai-request-button" onClick={() => void requestSuggestion()} disabled={health.state !== 'configured' || aiStatus === 'requesting' || referenceLoading} aria-busy={aiStatus === 'requesting'} aria-describedby={aiStatus === 'requesting' ? 'ai-request-progress' : undefined}>
               {aiStatus === 'requesting' ? <LoaderCircle className="spin" size={15} /> : <Sparkles size={15} />}
               {aiStatus === 'requesting' ? 'Reviewing this version…' : aiStatus === 'error' ? 'Try suggestion again' : 'Suggest a fresh direction'}
             </button>
@@ -878,7 +940,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
           </>
           {aiMessage && <p className={`ai-feedback ${aiStatus === 'error' ? 'error' : ''}`} role={aiStatus === 'error' ? 'alert' : 'status'}>{aiMessage}{aiStatus === 'error' && <span className="ai-recovery-note">Your design is unchanged. No automatic retries.{autoEnabled && autoPaused ? ' Live AI is paused until you explicitly resume or retry.' : ''}</span>}</p>}
           <div className="live-ai-settings">
-            <p id="live-ai-disclosure">Optional live AI sends your current layout and direction to the configured provider after settled edits. Provider usage may incur costs. Nothing is applied automatically. Consent lasts only this session.</p>
+            <p id="live-ai-disclosure">Optional live AI sends the canvas image, editable layout, direction and any attached reference to the configured provider after settled edits. Provider usage may incur costs. Nothing is applied automatically. Consent lasts only this session.</p>
             <label><input type="checkbox" aria-label="Enable live AI suggestions" aria-describedby="live-ai-disclosure" checked={autoEnabled} onChange={event => toggleAutomatic(event.target.checked)} /> Live AI after edits</label>
             <p>{!autoEnabled ? 'Off · manual requests only.' : autoPaused ? 'Paused after an AI failure. Editing stays local until you resume or retry.' : aiStatus === 'requesting' ? 'One request in progress. No parallel automatic requests.' : health.state !== 'configured' ? 'Waiting for valid local configuration. Local layout tools work offline.' : autoWaiting ? 'Waiting for edits to settle / request cadence.' : 'On · waits for a new edit. 1.5s settle; at least 15s between automatic starts.'}</p>
             {autoEnabled && autoPaused && <button className="compare-button" onClick={resumeAutomatic}>Resume live AI after next edit</button>}

@@ -7,6 +7,7 @@ import TemplatesPage from './pages/templates/TemplatesPage';
 import GuidePage from './pages/guide/GuidePage';
 import type { Project } from './types';
 import { CrashRecovery, ErrorBoundary, useErrors } from './components/ErrorHandling';
+import { ThemeSelector } from './Theme';
 import './pages/pages.css';
 import './app.css';
 
@@ -73,6 +74,7 @@ export default function App() {
         {pages.map(({ path: destination, label, icon: Icon }) => <a key={destination} href={`#${destination}`} aria-current={path === destination ? 'page' : undefined}><Icon size={16} aria-hidden="true" /><span>{label}</span></a>)}
       </nav>
       <span className="site-local-note">Your local design studio</span>
+      <ThemeSelector />
     </header>
     <main id="page-content" ref={main} tabIndex={-1} aria-label={page?.label ?? 'Page not found'}>
       <ErrorBoundary key={path} title={`${page?.label ?? 'Page'} unavailable`} reportError={reportError} fallback={retry => <section className="failure-page"><h1>This page could not be displayed.</h1><p>The editor session remains separate from this page. You can return to it or explicitly retry this page.</p><button type="button" onClick={retry}>Retry page</button><a href="#/editor">Open editor</a></section>}>

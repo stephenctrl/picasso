@@ -43,7 +43,7 @@ export const handleRequestError: ErrorRequestHandler = (error: unknown, req, res
       res.status(400).json({ error: 'Invalid request body.' });
       return;
     case 'entity.too.large':
-      res.status(413).json({ error: 'Project is too large (maximum 1 MB).' });
+      res.status(413).json({ error: 'Request is too large (maximum 8 MiB including images and project JSON).' });
       return;
     case 'charset.unsupported':
     case 'encoding.unsupported':
