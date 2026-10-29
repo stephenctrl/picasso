@@ -16,6 +16,31 @@ export function createElement(type: DesignElement['type'], count: number): Desig
   };
 }
 
+export const componentPresets = [
+  { id: 'box', label: 'Box / Panel', type: 'rectangle', description: 'One div · not a group' },
+  { id: 'headline', label: 'Headline text', type: 'text', description: 'Large paragraph · p' },
+  { id: 'paragraph', label: 'Paragraph text', type: 'text', description: 'Plain multiline · p' },
+  { id: 'button', label: 'Button', type: 'button', description: 'Native button · no action' },
+] as const;
+
+export type PresetId = typeof componentPresets[number]['id'];
+
+export function isPresetId(value: string): value is PresetId {
+  return componentPresets.some(preset => preset.id === value);
+}
+
+export function createPreset(id: PresetId, count: number, position?: { x: number; y: number }): DesignElement {
+  const preset = componentPresets.find(entry => entry.id === id)!;
+  const element = createElement(preset.type, count);
+  return {
+    ...element,
+    name: `${preset.label} ${count + 1}`,
+    ...(id === 'headline' ? { width: 360, height: 120, fontSize: 44, text: 'Make something good.' } : {}),
+    ...(id === 'paragraph' ? { width: 320, height: 100, fontSize: 18, text: 'A little space for your ideas.\nEdit this paragraph to tell your story.' } : {}),
+    ...(position ? { x: clamp(Math.round(position.x), -4000, 8000), y: clamp(Math.round(position.y), -4000, 8000) } : {}),
+  };
+}
+
 export function initialProject(): Project {
   const base = createElement('rectangle', 0);
   const element = (id: string, changes: Partial<DesignElement>): DesignElement => ({ ...base, id, ...changes });

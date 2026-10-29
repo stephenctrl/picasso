@@ -2,9 +2,11 @@
 
 ## 1. Product and release objective
 
-Picasso is a local-first desktop-browser design editor for composing a single artboard with local layout assistance and contextual AI improvements. The user remains the author: requesting a suggestion does not change the document; only accepting its preview commits changes. This release must provide a complete, usable editing workflow even when AI is not configured.
+Picasso is a local-first desktop-browser visual HTML/CSS editor. Users drag code-equivalent components onto an artboard instead of typing source: each box is a `div`, each text element a `p`, and each button a native `button`. Geometry and appearance become CSS. Design, generated code and standalone preview derive from the same committed document. The finished composition is copyable as HTML/CSS or a complete HTML page.
 
-The delivery sequence is deliberately incremental: **1 — editor foundation**, **2 — reversible and persistent workflow**, **3 — context-aware AI suggestions**, **4 — discoverable screen dimensions and interaction quality**, **5 — local alignment and arrangement**, **6 — opt-in integrated AI assistance**. The manager issues each increment's implementation instructions and reviews its evidence before authorizing the next. Requirements below are the source for that specification; the parent performs final integrated runtime acceptance. Automatic AI assistance is newly included only with explicit opt-in; unattended application of model output remains excluded.
+The existing editor, reversible/persistent workflow, contextual AI, screen controls and local layout assistance remain supported. The visual-code iteration adds genuine palette drag/drop, direct text editing, keyboard nudging, shared rendering/code generation, and Design / Code / Preview surfaces. AI remains optional: nothing changes until its proposal is explicitly accepted.
+
+The page-navigation iteration adds Home (`#/home`), Templates (`#/templates`) and Guide (`#/guide`) around the retained Editor (`#/editor`). The designer's page responsibilities, analyst improvements, folder contracts and acceptance checklist are in [pages.md](pages.md). `src/App.tsx` now owns navigation; the previous editor implementation lives in `src/pages/editor/EditorPage.tsx`. Earlier implementation-file references below describe the historical editor work.
 
 ## 2. Personas and primary use cases
 
@@ -14,13 +16,13 @@ The delivery sequence is deliberately incremental: **1 — editor foundation**, 
 | Iterating designer | Experiment without losing work | Duplicate and reorder elements, undo an unwanted change, save locally, and reopen or exchange a project. |
 | AI-assisted creator | Improve the actual current composition without surrendering control | Explicitly request a suggestion or opt into settled-edit assistance, inspect a clearly differentiated preview, then accept or dismiss it. |
 
-Primary sequence: open editor → choose screen dimensions → compose/select/edit with local guides and layout controls → save or export → optionally request or enable AI → review preview → accept or dismiss → continue editing. Ordinary editing and local assistance must not depend on AI availability.
+Primary sequence: Home → continue Editor or choose a starter from Templates → choose screen dimensions → drag components → edit text, position and CSS properties → inspect corresponding HTML/CSS → preview → copy a full page or HTML/CSS → save/export. Guide explains the workflow. Optionally request or enable AI, review its proposal, and accept or dismiss. Ordinary editing, code generation and preview must not depend on AI availability. Navigation preserves the current editor session; reload does not autosave or automatically reopen the single saved browser slot.
 
 ## 3. Release boundary
 
-**Included:** one artboard per project; adjustable screen presets and custom dimensions; rectangle, text and button elements; mouse/pointer-based direct manipulation plus accessible labeled controls; explicit multi-selection and layers; local smart guides, alignment and arrangement; project-level history; explicit local save/load; JSON import/export; SVG export; zoom and fit-to-view; explicit AI requests and optional settled-edit automatic requests; and one pending AI request or reviewable suggestion at a time.
+**Included:** one fixed-size artboard per project; adjustable screen presets and dimensions; box, headline-text, paragraph-text and button presets using the existing rectangle/text/button model; real palette drag/drop and accessible click creation; direct plain-text editing; pointer manipulation and keyboard nudging; local smart guides/alignment/arrangement; project history; local save/load; JSON import/export; SVG and standalone HTML download; Design / Code / Preview modes; selectable generated HTML/CSS, selected-node correspondence and clipboard/manual copy; zoom and fit; explicit AI requests and opt-in settled-edit requests.
 
-**Excluded:** authentication, cloud storage, real-time collaboration, multiple pages/artboards, groups, arbitrary vector paths, uploaded or remote images, component libraries, responsive layout engines, code export, image-generation services, and unattended AI changes. No external image fetching or cloud account is required. The product targets a desktop browser; a full mobile authoring experience is not a release criterion.
+**Excluded:** authentication, cloud storage, collaboration, multiple artboards, nesting/groups, arbitrary vectors, uploaded or remote images, reusable component definitions, responsive layout generation, editable-source round trips and unattended AI changes. Output is a flat, fixed-size, absolute-positioned HTML/CSS layout. Headline text remains a paragraph, not a persisted heading tag. Layers represent paint order, not DOM nesting. A full mobile authoring experience is not a release criterion.
 
 ## 4. Data contract
 
@@ -30,7 +32,7 @@ The shared TypeScript contract is authoritative for implementation:
 - `Project`: `version: 1`, `name`, `width`, `height`, `background`, `elements: DesignElement[]`.
 - `Suggestion`: `title`, `rationale`, `elements: DesignElement[]` — the **complete proposed replacement element array**, not a patch.
 - `POST /api/suggest`: `{ project, instruction }` → `{ suggestion }`; failures use `{ error: string }`.
-- `GET /api/health`: `{ ok: true, aiConfigured: boolean, model: string }`.
+- `GET /api/health`: `{ ok: true, aiConfigured: boolean, model: string, configurationScope: 'local', configurationError?: string }`. This validates local settings only; it does not verify provider authentication, model entitlement, quota or connectivity, and never sends a design.
 
 Project dimensions and element sizes must be finite and positive; coordinates must be finite; IDs must be unique within a project; element types and project version must be supported. Validation applies to external project and model data before it can replace current document content. All supported element properties must survive JSON save/export and reimport.
 
@@ -126,6 +128,24 @@ Shared validation limits apply equally to the editor, JSON import and API:
 | I-04 | Debounce automatic requests for 1500 ms after settled edits and enforce at least 15 seconds between automatic request starts, with at most one concurrent request. Abort/invalidate on document mutations or disabling automatic mode; reject stale results by revision. A dismissed/cancelled proposal, completed request or accepted suggestion must not itself cause a request loop without a new user edit. After provider/network/invalid-output failure, suspend automatic retries until explicit retry; never silently retry in the background. Scenario: edit during a slow request, dismiss, switch off and exercise failure; the document stays editable, stale proposals never appear and no repeated request storm occurs. |
 | I-05 | Make real AI proposals visible on the main artboard through lightweight changed/added ghosts and removal markers, with canvas-adjacent status, rationale, full-layout comparison and complete-replacement/removal disclosure. Keep Compare, Accept and Dismiss reachable without scrolling away from editing; preserve manual request/retry when automatic mode is off. Inline feedback is translucent, visually distinct from local guides/committed content and `pointer-events:none`, never an opaque full-board blocker. Compare hides inline ghosts; editing invalidates the proposal; Accept is explicit and undoable. Scenario: inspect inline differences at normal editing zoom, including a 4000px board where a miniature alone is insufficient; compare/dismiss and continue editing, then request again, accept and undo/redo with document changes only on acceptance. |
 
+### Visual-code iteration — compiled analyst implementation checklist
+
+The analyst identified a working freeform canvas, geometry/property editing, layers, history, persistence and guarded AI. Missing were genuine palette drag/drop, HTML/CSS generation, direct text authoring and the design-to-copy workflow. Keep version 1 and the three existing persisted types; a second document store or partial schema migration would break import, layout and complete-array AI proposals.
+
+| ID | Files | Required implementation and acceptance |
+| --- | --- | --- |
+| VC-01 | `src/render.ts`, `src/App.tsx` | Share one tag/style description between real canvas nodes and generated markup. Map rectangle/text/button to div/p/button; reset native styles and explicitly encode fonts, metrics, wrap, clipping, geometry, paint order and colors. Generated buttons use `type="button"`. |
+| VC-02 | `src/render.ts`, `src/render.test.ts` | Generate embeddable HTML, scoped CSS, a standalone UTF-8 document and element-ID-to-selector snippets. Escape user text/title; never interpolate IDs/names as CSS or executable markup. Literal quotes, ampersands and closing style/script tags remain text. Output needs no network, React or Picasso runtime. |
+| VC-03 | `src/document.ts`, `src/App.tsx`, `src/styles.css` | Offer draggable Box, Headline text, Paragraph text and Button presets plus click/keyboard alternatives. Accept only internal allowlisted drags. Drop top-left at `(client - transformed artboard origin) / zoom`, including scroll and drops atop content. Valid creation is one undoable mutation; outside/cancelled/foreign drops do nothing; enforce the 200-element limit. |
+| VC-04 | `src/App.tsx`, `src/styles.css` | Double-click or explicitly invoke Edit text. Use a plain multiline draft, at most 2,000 characters, with IME-safe entry. Blur/Done commits once; Escape cancels without history. Suppress dragging and document shortcuts while editing. Resolve drafts before output, mode changes and AI requests so exported content is never accidentally stale. |
+| VC-05 | `src/App.tsx` | In Design, arrow keys nudge selected nodes by 1 document pixel; Shift uses 10. Preserve group offsets and coordinate bounds, independent of zoom. Do not intercept typing or unrelated focused controls. Existing history and AI invalidation/scheduling apply to committed edits, not draft keystrokes. |
+| VC-06 | `src/App.tsx`, code/preview UI, `src/styles.css` | Keep Design / Code / Preview discoverable. Code exposes selectable HTML/CSS and the selected node's actual tag/selector. Selecting a code node selects the same layer; selection survives mode changes. Copy HTML, CSS, full page and selected-node snippets; explain snippet CSS/context dependencies. Await clipboard success; on rejection retain selectable code and accurate manual-copy instructions. |
+| VC-07 | `src/App.tsx`, preview UI | Render exactly the generated full document in a titled sandboxed iframe. Keep large document edges reachable. Download the same standalone HTML and preserve JSON/SVG export. Unaccepted AI ghosts, selection chrome and editor controls never enter output. |
+| VC-08 | `src/App.tsx`, `server/ai.ts` | Retain the authoritative Project, version-1 storage/import and all history boundaries. Code/preview/selection/copy are transient and send no AI requests. AI still returns validated structured elements, never HTML/CSS. Accept changes elements only, updates code and is one undoable action; preserve existing consent, cancellation and stale-result guards. |
+| VC-09 | integrated runtime review | Exercise drag → text/style edit → code mapping → preview → copy/download, zoomed/scrolled placement, cancel/undo, manual-copy recovery, literal markup, save/reopen and 1024 × 768 / 1440 × 900 reachability. Run integrated build/regression checks after development. Independent analyst reviews the checklist and actionable findings are fixed before delivery. Report only observed runtime evidence. |
+
+No new persisted metadata is needed. SVG retains its existing separate text renderer; HTML preview parity does not imply pixel-exact SVG parity. Fixed positioning and the absence of responsive behavior must be visible in the authoring/output workflow.
+
 ## 7. Privacy, persistence and failure policy
 
 | ID | Requirement |
@@ -135,6 +155,11 @@ Shared validation limits apply equally to the editor, JSON import and API:
 | P-03 | Persist only project content in project JSON; do not persist transient ghosts, pending request state, server errors or credentials. A reopened document starts without an AI proposal. |
 | P-04 | Missing/corrupt local data, unavailable browser storage, invalid imports and failed downloads must not silently destroy the open project. Show a useful message and preserve a usable editor; available JSON export remains a recovery route when local storage is unavailable. |
 | P-05 | API input and output are untrusted. Reject unsupported or invalid projects/elements and unsafe values before adoption; return actionable error messages without exposing secrets or raw provider internals. |
+| P-06 | Show actionable operation failures in a shared dismissible error notification, including when the originating editor is hidden. Preserve inline/manual-copy recovery; do not turn normal cancellation, success or field validation into global errors. Unexpected browser errors/rejections remain diagnosable and must not imply automatic rollback. |
+| P-07 | Contain surrounding-page crashes independently of the editor. Editor/root failure must not silently reset or overwrite storage; offer the last known committed JSON snapshot where available and disclose that later drafts/history may be unrecoverable. No automatic retry or reload. |
+| P-08 | Ignore obsolete clipboard/import completions; leaving Editor permanently invalidates that pending import. Pointer-capture failure must not install a stuck gesture. Server startup failures produce safe terminal guidance and nonzero exit; request middleware preserves meaningful 400/413/415/500 classifications. |
+
+The analyst defect inventory, original file/line references, implemented fixes and exercised failure scenarios are recorded in [error-audit.md](error-audit.md).
 
 ## 8. Observable acceptance by increment
 

@@ -1,12 +1,15 @@
 import 'dotenv/config';
 import express from 'express';
-import type { Request, Response, NextFunction } from 'express';
+import type { ViteDevServer } from 'vite';
 import { createServer } from 'vite';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer as createHttpServer } from 'node:http';
-import { aiConfiguration, suggest } from './ai';
+import { promisify } from 'node:util';
+import { AiError, aiConfiguration, suggest } from './ai';
 import { parseRequest } from './validation';
+import { handleRequestError } from './errors';
+import { parsePort, serverFailureMessage } from './startup';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const app = express();
@@ -27,7 +30,10 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '1mb' }));
 app.get('/api/health', (_req, res) => {
   const config = aiConfiguration();
-  res.json({ ok: true, aiConfigured: Boolean(config.key), model: config.model });
+  res.json({
+    ok: true, aiConfigured: !config.configurationError, model: config.model,
+    configurationScope: 'local', configurationError: config.configurationError,
+  });
 });
 app.post('/api/suggest', async (req, res) => {
   let input;
@@ -35,10 +41,6 @@ app.post('/api/suggest', async (req, res) => {
     input = parseRequest(req.body);
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : 'Invalid design request.' });
-    return;
-  }
-  if (!aiConfiguration().key) {
-    res.status(503).json({ error: 'AI is not configured. Copy .env.example to .env, set GEMINI_API_KEY, and restart Picasso. Your editor works without AI.' });
     return;
   }
   const controller = new AbortController();
@@ -49,24 +51,61 @@ app.post('/api/suggest', async (req, res) => {
     if (!controller.signal.aborted) res.json({ suggestion });
   } catch (error) {
     if (controller.signal.aborted) return;
-    const timeout = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
-    res.status(timeout ? 504 : 502).json({ error: timeout ? 'The AI request timed out. Your canvas is unchanged; try again.' : error instanceof Error ? error.message : 'The AI request failed.' });
+    res.status(error instanceof AiError ? error.status : 502).json({
+      error: error instanceof AiError ? error.message : 'The AI request failed. Your canvas is unchanged; check the server configuration and connection.',
+    });
   } finally {
     res.off('close', cancelDisconnectedRequest);
   }
 });
 app.use('/api', (_req, res) => { res.status(404).json({ error: 'Unknown API endpoint.' }); });
 
-if (process.argv.includes('--production')) {
-  app.use(express.static(path.join(root, 'dist')));
-  app.get('/{*path}', (_req, res) => { res.sendFile(path.join(root, 'dist', 'index.html')); });
-} else {
-  const vite = await createServer({ root, server: { middlewareMode: true, hmr: { server: httpServer } }, appType: 'spa' });
-  app.use(vite.middlewares);
+let port: number | undefined;
+let vite: ViteDevServer | undefined;
+let shuttingDown = false;
+
+async function stopAfterFailure(error: unknown): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  process.exitCode = 1;
+  console.error(serverFailureMessage(error, port));
+  const httpClosed = promisify(httpServer.close.bind(httpServer))().catch((closeError: NodeJS.ErrnoException) => {
+    if (closeError.code !== 'ERR_SERVER_NOT_RUNNING') throw closeError;
+  });
+  httpServer.closeAllConnections();
+  const cleanup = await Promise.allSettled([
+    (async () => { await vite?.close(); })(),
+    httpClosed,
+  ]);
+  if (cleanup.some((result) => result.status === 'rejected')) {
+    console.error('Picasso could not fully close its server resources; the process will now exit.');
+  }
+  process.exit(1);
 }
-app.use((error: { status?: number }, _req: Request, res: Response, _next: NextFunction) => {
-  res.status(error.status === 413 ? 413 : 400).json({ error: error.status === 413 ? 'Project is too large (maximum 1 MB).' : 'Invalid request body.' });
-});
-const port = Number(process.env.PORT || 3000);
-if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT must be an integer between 1 and 65535.');
-httpServer.listen(port, '127.0.0.1', () => { console.log(`Picasso is ready at http://127.0.0.1:${port}`); });
+
+httpServer.on('error', (error) => { void stopAfterFailure(error); });
+
+async function start(): Promise<void> {
+  try {
+    port = parsePort(process.env.PORT);
+    if (process.argv.includes('--production')) {
+      app.use(express.static(path.join(root, 'dist')));
+      app.get('/{*path}', (_req, res) => { res.sendFile(path.join(root, 'dist', 'index.html')); });
+    } else {
+      vite = await createServer({ root, server: { middlewareMode: true, hmr: { server: httpServer } }, appType: 'spa' });
+      if (shuttingDown) {
+        await vite.close();
+        return;
+      }
+      app.use(vite.middlewares);
+    }
+    app.use(handleRequestError);
+    httpServer.listen(port, '127.0.0.1', () => {
+      if (!shuttingDown) console.log(`Picasso is ready at http://127.0.0.1:${port}`);
+    });
+  } catch (error) {
+    await stopAfterFailure(error);
+  }
+}
+
+await start();
