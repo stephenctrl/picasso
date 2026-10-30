@@ -22,6 +22,8 @@ Restart after changing `.env`; set `PORT` there to change the port. The server i
 ## Use
 
 - Start in **Templates** or **Editor**. Drag components, select layers, and edit their properties. Use alignment and undo/redo to refine the layout.
+- Open **Screen** for Phone, Tablet, Laptop, or Desktop layouts. Choose **Custom** to apply a width:height aspect ratio at a chosen screen width, enter exact dimensions, or swap orientation. Each side supports 240–4,000 units; layers keep their size and position.
+- Hover any element’s edge or corner and drag to resize, including unselected elements. Drag the interior to move. Escape cancels an active drag; completed resizing supports undo/redo.
 - Choose **System / Light / Dark** for the interface; artwork and export colors stay unchanged.
 - Open **AI design partner**, describe a revision direction, and optionally attach a PNG/JPEG/WebP reference (up to 5 MiB, resized to a maximum 1600px edge). Review the preview and rationale, then **Accept** or **Dismiss**. Accepted changes can be undone.
 - **Save locally** replaces one browser-local saved slot. Reopen with **Open saved project**; export/import project JSON for portable backups. Reloading does not save or restore your work.

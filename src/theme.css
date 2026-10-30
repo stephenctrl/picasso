@@ -147,3 +147,8 @@
   .theme-selector { gap: 6px; }
   .recovery-header { padding-inline: 16px; }
 }
+
+:root[data-theme="dark"] .device-screen-ratio { background: var(--ui-raised); border-color: var(--ui-border); }
+:root[data-theme="dark"] :is(.device-screen-current > span, .device-screen-colon, .device-screen-help, .device-screen-boundary) { color: var(--ui-muted); }
+:root[data-theme="dark"] .device-screen-error { color: var(--ui-error-text); }
+:root[data-theme="dark"] .device-screen-settings input[aria-invalid="true"] { border-color: var(--ui-error-border); }

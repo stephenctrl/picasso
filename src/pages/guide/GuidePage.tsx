@@ -18,9 +18,9 @@ export default function GuidePage() {
           <span className="page-step-number" aria-hidden="true">01 / COMPOSE</span>
           <h2 id="page-compose-heading">Give your idea some shape.</h2>
           <ol className="page-task-list">
-            <li><strong>Set the scene.</strong> Choose your screen dimensions and background in the editor, or begin with a starter.</li>
+            <li><strong>Set the scene.</strong> Open Screen to choose a Phone, Tablet, Laptop, or Desktop layout. Custom lets you apply a width:height ratio at a chosen screen width, enter exact dimensions, or swap orientation. Each side supports 240–4,000 units. Layers retain their sizes and positions; content outside the screen is clipped. Set the background in the inspector, or begin with a starter.</li>
             <li><strong>Add the building blocks.</strong> Drag a box/panel, headline, paragraph, or button onto the Design canvas. You can also click a component or focus it and press Enter to create it.</li>
-            <li><strong>Make it yours.</strong> Select an element to edit position, dimensions, fill, and text properties. Double-click text or a button, or choose Edit text, to edit its plain text. Done or leaving the field commits the draft; Escape cancels it.</li>
+            <li><strong>Make it yours.</strong> Hover an element’s edge or corner and drag to resize it; drag the interior to move. You can resize an unselected element directly. Escape cancels the active drag, and completed drags support undo/redo. Select an element to edit position, dimensions, fill, and text properties. Double-click inside text or a button, or choose Edit text, to edit its plain text. Done or leaving the field commits the draft; Escape cancels it.</li>
             <li><strong>Bring things into balance.</strong> Use layers to select and reorder. Shift-click elements or layers for multiple selection. Alignment uses the artboard for one element and the selection bounds for multiple elements. Local guides and layout assistance work offline.</li>
           </ol>
           <p>Choose <strong>System, Light, or Dark</strong> for the interface. Your theme choice does not change the canvas colors or exported design.</p>
@@ -60,7 +60,7 @@ export default function GuidePage() {
             <div><dt>Delete selection</dt><dd><kbd>Delete</kbd> / <kbd>Backspace</kbd></dd></div>
             <div><dt>Nudge 1 pixel</dt><dd><kbd>Arrow keys</kbd></dd></div>
             <div><dt>Nudge 10 pixels</dt><dd><kbd>Shift</kbd> + <kbd>Arrow keys</kbd></dd></div>
-            <div><dt>Cancel text draft / clear selection</dt><dd><kbd>Escape</kbd></dd></div>
+            <div><dt>Cancel drag / text draft / clear selection</dt><dd><kbd>Escape</kbd></dd></div>
           </dl>
           <p className="page-small">Duplicate, delete, and nudge apply in Design with canvas or layer focus. While typing in a field, normal text-editing behavior takes priority. Nudge distances are document pixels, independent of zoom.</p>
         </section>

@@ -1,5 +1,5 @@
 import { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, DragEvent, KeyboardEvent, PointerEvent as ReactPointerEvent, Ref } from 'react';
+import type { ChangeEvent, CSSProperties, DragEvent, KeyboardEvent, PointerEvent as ReactPointerEvent, Ref } from 'react';
 import { AlertCircle, ArrowDown, ArrowUp, Check, ChevronDown, Circle, Copy, Download, FolderOpen, Layers, LoaderCircle, Minus, Plus, Redo2, RefreshCw, Save, Sparkles, Square, Trash2, Type, Undo2, Upload, X, MousePointer2 } from 'lucide-react';
 import type { DesignElement, Project, Suggestion } from '../../types';
 import { clamp, componentPresets, createPreset, initialProject, isPresetId } from '../../document';
@@ -9,16 +9,19 @@ import { download, projectSvg } from '../../export';
 import { projectImage, referenceImage } from '../../aiImage';
 import { applyLayout, getAlignmentGuides } from '../../layout';
 import type { AlignmentGuide, LayoutAction } from '../../layout';
+import { resizeBounds, resizeDirections, resizeHitArea } from '../../resize';
+import type { ResizeDirection } from '../../resize';
 import { elementTag, elementStyles, projectCode } from '../../render';
 import { CodePanel } from '../../CodePanel';
 import type { CopyPart } from '../../CodePanel';
 
 import { useErrors } from '../../components/ErrorHandling';
+import { ScreenSettings } from '../../components/ScreenSettings';
 type WorkspaceMode = 'design' | 'code' | 'preview';
 type TextDraft = { id: string; text: string };
 const presetMime = 'application/x-picasso-preset';
 
-type Gesture = { ids: string[]; mode: 'move' | 'resize'; startX: number; startY: number; before: Project; element: DesignElement; pointerId: number; collapseOnClick: string | null; moved: boolean };
+type Gesture = { ids: string[]; direction?: ResizeDirection; startX: number; startY: number; scale: number; before: Project; element: DesignElement; pointerId: number; captureTarget: HTMLElement; collapseOnClick: string | null; moved: boolean };
 type Proposal = { suggestion: Suggestion; revision: number; requestId: number };
 type Health = { state: 'checking' | 'configured' | 'unconfigured' | 'unavailable'; model: string; message?: string };
 
@@ -645,6 +648,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
     if (!active) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       const target = event.target;
+      if (event.key === 'Escape' && gestureRef.current && !event.isComposing) { event.preventDefault(); finishGesture(true); return; }
       if (gestureRef.current || textDraftRef.current || event.isComposing || (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable]'))) return;
       const modifier = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
@@ -671,7 +675,8 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
     return () => window.removeEventListener('keydown', onKeyDown);
   });
 
-  function startGesture(event: ReactPointerEvent<HTMLElement>, element: DesignElement, mode: Gesture['mode']) {
+  function startGesture(event: ReactPointerEvent<HTMLElement>, element: DesignElement, direction?: ResizeDirection) {
+    const mode = direction ? 'resize' : 'move';
     if (event.button !== 0 || !event.isPrimary || gestureRef.current || textDraftRef.current) return;
     event.preventDefault(); event.stopPropagation();
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
@@ -694,18 +699,19 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
     clearAutoSchedule();
     eligibleRevisionRef.current = pendingRevision;
     setSelectedIds(ids);
-    gestureRef.current = { ids, mode, startX: event.clientX, startY: event.clientY, before: projectRef.current, element: mode === 'move' ? bounds : current, pointerId: event.pointerId, collapseOnClick: ids.length > 1 ? current.id : null, moved: false };
+    gestureRef.current = { ids, direction, startX: event.clientX, startY: event.clientY, scale, before: projectRef.current, element: mode === 'move' ? bounds : current, pointerId: event.pointerId, captureTarget: event.currentTarget, collapseOnClick: ids.length > 1 ? current.id : null, moved: false };
   }
 
   function moveGesture(event: ReactPointerEvent) {
     const gesture = gestureRef.current;
     if (!gesture || event.pointerId !== gesture.pointerId) return;
-    const dx = (event.clientX - gesture.startX) / scale;
-    const dy = (event.clientY - gesture.startY) / scale;
+    const dx = (event.clientX - gesture.startX) / gesture.scale;
+    const dy = (event.clientY - gesture.startY) / gesture.scale;
     if (!gesture.moved && Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) < 2) return;
     gesture.moved = true;
-    if (gesture.mode === 'resize') {
-      publish({ ...gesture.before, elements: gesture.before.elements.map(element => element.id === gesture.ids[0] ? { ...element, width: clamp(Math.round(gesture.element.width + dx), 1, 4000), height: clamp(Math.round(gesture.element.height + dy), 1, 4000) } : element) });
+    if (gesture.direction) {
+      const bounds = resizeBounds(gesture.element, gesture.direction, dx, dy);
+      publish({ ...gesture.before, elements: gesture.before.elements.map(element => element.id === gesture.ids[0] ? { ...element, ...bounds } : element) });
       return;
     }
     const subject = { ...gesture.element, x: Math.round(gesture.element.x + dx), y: Math.round(gesture.element.y + dy) };
@@ -723,6 +729,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
     const gesture = gestureRef.current;
     if (!gesture) return;
     gestureRef.current = null;
+    if (gesture.captureTarget.hasPointerCapture(gesture.pointerId)) gesture.captureTarget.releasePointerCapture(gesture.pointerId);
     setGuides([]);
     if (cancel) {
       publish(gesture.before);
@@ -955,15 +962,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
         {textDraft && <div ref={textActionsRef} className="text-edit-actions" data-text-edit-actions onBlur={event => { if (!(event.relatedTarget instanceof HTMLElement) || (!event.relatedTarget.closest('[data-text-edit-actions]') && event.relatedTarget !== textInputRef.current)) finishText(); }} onKeyDown={event => { event.stopPropagation(); if (event.key === 'Escape' && !event.nativeEvent.isComposing && !composingRef.current) { event.preventDefault(); finishText(true); } }}><span>Plain text · {textDraft.text.length}/2000 · Escape cancels</span><button onPointerDown={event => event.preventDefault()} onClick={() => finishText()}>Done</button><button onPointerDown={event => event.preventDefault()} onClick={() => finishText(true)}>Cancel</button></div>}
         {mode === 'design' && <>
         <div className="canvas-toolbar"><div><span className="page-chip">01</span>
-          <details className="screen-settings"><summary aria-label="Screen settings"><strong>Screen</strong><span>{project.width} × {project.height}</span><ChevronDown size={13} /></summary>
-            <div className="screen-popover"><h3>Screen dimensions</h3>
-              <label className="field"><span>Screen preset</span><select aria-label="Screen preset" value={project.width === 1440 && project.height === 900 ? 'desktop' : project.width === 768 && project.height === 1024 ? 'tablet' : project.width === 390 && project.height === 844 ? 'mobile' : 'custom'} onChange={event => { const presets: Record<string, [number, number]> = { desktop: [1440, 900], tablet: [768, 1024], mobile: [390, 844] }; const preset = presets[event.target.value]; if (preset) resizeScreen(...preset); }}>
-                <option value="custom">Custom dimensions</option><option value="desktop">Desktop · 1440 × 900</option><option value="tablet">Tablet · 768 × 1024</option><option value="mobile">Mobile · 390 × 844</option>
-              </select></label>
-              <div className="field-grid"><Field label="Screen width" value={project.width} min={240} max={4000} onCommit={value => resizeScreen(Number(value), projectRef.current.height)} /><Field label="Screen height" value={project.height} min={240} max={4000} onCommit={value => resizeScreen(projectRef.current.width, Number(value))} /></div>
-              <button className="swap-orientation" onClick={() => resizeScreen(projectRef.current.height, projectRef.current.width)}><RefreshCw size={13} /> Swap orientation</button><p className="field-note">240–4,000 document units. Layers keep their size and position; content beyond the screen is clipped, not resized or repositioned.</p>
-            </div>
-          </details>
+          <ScreenSettings width={project.width} height={project.height} onResize={resizeScreen} />
         </div><div className="selection-actions"><button aria-label="Duplicate selected layers (Ctrl or Command D)" title="Duplicate all selected layers · Ctrl/⌘ D" onClick={duplicateSelected} disabled={!selectedIds.length || project.elements.length + selectedIds.length > 200}><Copy size={14} /><span>Duplicate</span></button><button aria-label="Delete selected layers" title="Delete all selected layers" onClick={removeSelected} disabled={!selectedIds.length}><Trash2 size={14} /><span>Delete</span></button></div></div>
         <section className="local-assistance" aria-label="Local layout assistance">
           <div className="local-heading"><strong>Local layout</strong><span>{selectedElements.length} selected · Shift-click to toggle</span><label><input type="checkbox" checked={guidesEnabled} onChange={event => { setGuidesEnabled(event.target.checked); setGuides([]); }} /> Smart guides</label></div>
@@ -996,10 +995,15 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
         <div ref={viewportRef} className="canvas-scroll" onPointerDown={event => { if (event.target === event.currentTarget || event.target === boardAreaRef.current) { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); setSelectedIds([]); } }}>
           <div ref={boardAreaRef} className="artboard-area"><div className="artboard-label"><span>{project.name || 'Untitled project'} · COMMITTED DESIGN</span><span>{project.width} × {project.height}</span></div>
             <div className="artboard-frame" style={{ width: project.width * scale, height: project.height * scale }}>
-              <div ref={artboardRef} tabIndex={0} aria-label="Design artboard. Select a layer, then use arrows to move by one pixel or Shift arrows for ten." className={`artboard ${dragOver ? 'is-drop-target' : ''}`} style={{ width: project.width, height: project.height, background: project.background, transform: `scale(${scale})` }} onDragEnter={event => { if (acceptsPreset(event)) { event.preventDefault(); setDragOver(true); } }} onDragOver={event => { if (acceptsPreset(event)) { event.preventDefault(); event.dataTransfer.dropEffect = projectRef.current.elements.length >= 200 ? 'none' : 'copy'; setDragOver(true); } }} onDragLeave={event => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragOver(false); }} onDrop={dropPreset} onPointerDown={event => { if (event.target === event.currentTarget) { resolveDrafts(); setSelectedIds([]); } }} onPointerMove={moveGesture} onPointerUp={() => finishGesture()} onPointerCancel={() => finishGesture(true)} onLostPointerCapture={() => finishGesture()}>
-                {project.elements.map(element => <div className="element-hit-area" key={element.id} style={{ left: element.x, top: element.y, width: element.width, height: element.height }} onPointerDown={event => startGesture(event, element, 'move')} onDoubleClick={event => { event.stopPropagation(); beginText(element); }} aria-label={`${element.name || element.type}, drag to move${element.type !== 'rectangle' ? ', double-click to edit text' : ''}`}>
-                  <ElementView element={{ ...element, x: 0, y: 0 }} />
-                </div>)}
+              <div ref={artboardRef} tabIndex={0} aria-label="Design artboard. Drag a layer interior to move, or an edge or corner to resize. Select a layer, then use arrows to move by one pixel or Shift arrows for ten." className={`artboard ${dragOver ? 'is-drop-target' : ''}`} style={{ width: project.width, height: project.height, background: project.background, transform: `scale(${scale})` }} onDragEnter={event => { if (acceptsPreset(event)) { event.preventDefault(); setDragOver(true); } }} onDragOver={event => { if (acceptsPreset(event)) { event.preventDefault(); event.dataTransfer.dropEffect = projectRef.current.elements.length >= 200 ? 'none' : 'copy'; setDragOver(true); } }} onDragLeave={event => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragOver(false); }} onDrop={dropPreset} onPointerDown={event => { if (event.target === event.currentTarget) { resolveDrafts(); setSelectedIds([]); } }} onPointerMove={moveGesture} onPointerUp={event => { if (event.pointerId === gestureRef.current?.pointerId) finishGesture(); }} onPointerCancel={event => { if (event.pointerId === gestureRef.current?.pointerId) finishGesture(true); }} onLostPointerCapture={event => { if (event.pointerId === gestureRef.current?.pointerId) finishGesture(true); }}>
+                {project.elements.map(element => {
+                  const hit = resizeHitArea(element.width, element.height, scale);
+                  const isSelected = selectedIds.includes(element.id);
+                  return <div className={`element-hit-area element-resize-target${isSelected ? ' element-resize-selected' : ''}`} key={element.id} style={{ left: element.x, top: element.y, width: element.width, height: element.height, '--element-resize-x': `${hit.x}px`, '--element-resize-y': `${hit.y}px`, '--element-resize-stroke': `${1 / scale}px` } as CSSProperties} onPointerDown={event => startGesture(event, element)} onDoubleClick={event => { event.stopPropagation(); beginText(element); }} aria-label={`${element.name || element.type}, drag interior to move, edge or corner to resize${element.type !== 'rectangle' ? ', double-click interior to edit text' : ''}`}>
+                    <ElementView element={{ ...element, x: 0, y: 0 }} />
+                    {resizeDirections.map(({ direction, label }) => <button key={direction} type="button" className="element-resize-zone" data-direction={direction} tabIndex={isSelected ? 0 : -1} aria-label={`Resize ${element.name || element.type} from ${label}`} title={`Drag ${label} to resize · Escape cancels`} onPointerDown={event => startGesture(event, element, direction)} onDoubleClick={event => event.stopPropagation()} />)}
+                  </div>;
+                })}
                 {proposal && !showOriginal && <>
                   {proposalChanges.map(element => <div key={`proposal-${element.id}`} className="canvas-proposal-ghost" aria-label={`Proposed ${committedById!.has(element.id) ? 'change' : 'addition'}: ${element.name || element.type}, not applied`} style={{ left: element.x, top: element.y, width: element.width, height: element.height, outlineWidth: 1.5 / scale, borderRadius: element.borderRadius }}>
                     <ElementView element={{ ...element, x: 0, y: 0 }} />
@@ -1007,7 +1011,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
                   </div>)}
                   {proposalRemovals.map(element => <div key={`removal-${element.id}`} className="canvas-proposal-removal" aria-label={`Proposed removal: ${element.name || element.type}, not applied`} style={{ left: element.x, top: element.y, width: element.width, height: element.height, outlineWidth: 1.5 / scale, borderRadius: element.borderRadius }}><span className="canvas-proposal-badge" style={{ transform: `scale(${1 / scale})` }}>AI REMOVAL · NOT APPLIED</span></div>)}
                 </>}
-                {selectedElements.map(element => <div key={element.id} className="selection-outline" style={{ left: element.x, top: element.y, width: element.width, height: element.height }}>{selected && <><span className="selection-size">{Math.round(element.width)} × {Math.round(element.height)}</span><i className="handle top-left" /><i className="handle top-right" /><i className="handle bottom-left" /><button className="handle resize-handle" style={{ width: 14 / scale, height: 14 / scale, right: -7 / scale, bottom: -7 / scale }} aria-label="Resize selected element" onPointerDown={event => startGesture(event, element, 'resize')} /></>}</div>)}
+                {selectedElements.map(element => <div key={element.id} className="selection-outline" style={{ left: element.x, top: element.y, width: element.width, height: element.height }}>{selected && <span className="selection-size">{Math.round(element.width)} × {Math.round(element.height)}</span>}</div>)}
                 {guides.map(guide => <div key={guide.axis} className={`alignment-guide guide-${guide.axis}`} style={guide.axis === 'x' ? { left: guide.position, width: 1 / scale } : { top: guide.position, height: 1 / scale }} />)}
                 {textDraft && editingElement && <textarea ref={textInputRef} className="direct-text-editor" aria-label={`Edit text for ${editingElement.name || editingElement.type}`} maxLength={2000} value={textDraft.text} spellCheck={false} style={{ ...elementStyles(editingElement), display: 'block', zIndex: 1200, resize: 'none', outline: `${2 / scale}px solid #64886c`, outlineOffset: 0, pointerEvents: 'auto' }} onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={event => {
                   if (textDraftRef.current?.id !== editingElement.id) return;
@@ -1054,7 +1058,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
             <section className="inspector-section"><h3>A space of your own</h3><p className="section-caption">Set the stage for your next idea.</p><Field label="Project name" value={project.name} onCommit={name => commit({ ...projectRef.current, name })} /></section>
             <section className="inspector-section"><h3>Dimensions</h3><div className="field-grid"><Field label="Width" value={project.width} min={240} max={4000} onCommit={value => commit({ ...projectRef.current, width: Number(value) })} /><Field label="Height" value={project.height} min={240} max={4000} onCommit={value => commit({ ...projectRef.current, height: Number(value) })} /></div><p className="field-note">Document units · 240–4,000 px</p></section>
             <section className="inspector-section"><h3>Canvas</h3><ColorField label="Background" value={project.background} onChange={background => commit({ ...projectRef.current, background })} /></section>
-            <div className="inspector-tip"><MousePointer2 size={19} /><h3>Find your flow</h3><p>Select any element to make it yours. Drag to move, use the corner to resize, or fine-tune the details right here.</p></div>
+            <div className="inspector-tip"><MousePointer2 size={19} /><h3>Find your flow</h3><p>Drag any element’s interior to move it. Hover an edge or corner and drag to resize, even before selecting it. Press Escape to cancel, or fine-tune the details right here.</p></div>
           </>}
         </div>
         <div className="inspector-footer"><span className="privacy-dot" /> Local-first. Always in your hands.</div>
