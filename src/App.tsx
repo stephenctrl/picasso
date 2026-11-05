@@ -25,9 +25,13 @@ export default function App() {
   const [session, setSession] = useState<EditorSession | null>(null);
   const editor = useRef<EditorHandle>(null);
   const main = useRef<HTMLElement>(null);
+  const recoveryProject = useRef<Project | null>(null);
   const updateSession = useCallback((next: EditorSession) => {
-    rememberProject(next.project);
-    setSession(next);
+    if (recoveryProject.current !== next.project) {
+      rememberProject(next.project);
+      recoveryProject.current = next.project;
+    }
+    setSession(current => current?.project === next.project && current.saved === next.saved ? current : next);
   }, [rememberProject]);
   const isEditor = path === '/editor';
   const page = pages.find(entry => entry.path === path);

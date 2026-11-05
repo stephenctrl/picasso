@@ -43,4 +43,10 @@ npm run build  # type-check and build
 npm start      # serve the production build locally; build first
 ```
 
+## Performance and GPU planning
+
+Design mode generates HTML/CSS only when requested. Unchanged canvas layers are reused, pointer updates are batched to animation frames, and pointer release applies the final coordinates before recording undo. UI controls use short feedback transitions; nonessential motion follows the system’s reduced-motion preference. Artwork geometry is not interpolated behind the pointer.
+
+See [TODO.md](TODO.md) for the profiling-gated GPU roadmap: browser-managed compositing, optional worker/OffscreenCanvas image preparation, WebGPU/WebGL access and fallbacks, and compatibility checks. No explicit GPU API or GPU requirement has been added.
+
 [Apache License 2.0](LICENSE.txt).

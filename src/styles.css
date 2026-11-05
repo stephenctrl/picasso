@@ -292,3 +292,36 @@
 .element-resize-zone:is([data-direction="nw"], [data-direction="sw"]) { left: 0; }
 .element-resize-zone:is([data-direction="ne"], [data-direction="se"]) { right: 0; }
 .element-resize-zone:is([data-direction="ne"], [data-direction="nw"], [data-direction="se"], [data-direction="sw"])::after { inset: 15%; }
+
+/* Feedback belongs to UI chrome; authored geometry always follows input directly. */
+:is(.site-header nav a, .page-button, .tool-grid button, .workspace-modes button,
+    .icon-button, .save-button, .file-menu > summary, .menu-popover button,
+    .screen-settings summary, .layout-buttons button, .selection-actions button,
+    .layer-row, .zoom-controls button, .code-quick-actions button,
+    .code-block-heading button, .html-import-dialog button) {
+  touch-action: manipulation;
+  transition: background-color 100ms ease-out, border-color 100ms ease-out, color 100ms ease-out, opacity 100ms ease-out;
+}
+:is(.site-header nav a, .page-button, .tool-grid button, .workspace-modes button,
+    .icon-button, .save-button, .file-menu > summary, .menu-popover button,
+    .screen-settings summary, .layout-buttons button, .selection-actions button,
+    .layer-row, .zoom-controls button, .code-quick-actions button,
+    .code-block-heading button, .html-import-dialog button):active:not(:disabled) {
+  opacity: .78;
+  transition-duration: 0s;
+}
+.menu-popover, .screen-popover { animation: ui-popover-in 120ms ease-out; }
+.html-import-dialog[open] { animation: ui-dialog-in 120ms ease-out; }
+@keyframes ui-popover-in {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes ui-dialog-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  :is(.site-header nav a, .page-button, .tool-grid button, .workspace-modes button,
+      .icon-button, .save-button, .file-menu > summary, .menu-popover button,
+      .screen-settings summary, .layout-buttons button, .selection-actions button,
+      .layer-row, .zoom-controls button, .code-quick-actions button,
+      .code-block-heading button, .html-import-dialog button) { transition: none; }
+  .menu-popover, .screen-popover, .html-import-dialog[open] { animation: none; }
+}

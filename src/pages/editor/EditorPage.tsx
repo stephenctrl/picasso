@@ -1,5 +1,5 @@
-import { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, CSSProperties, DragEvent, KeyboardEvent, PointerEvent as ReactPointerEvent, Ref } from 'react';
+import { memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import type { ChangeEvent, CSSProperties, DragEvent, KeyboardEvent, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, Ref, RefObject } from 'react';
 import { AlertCircle, ArrowDown, ArrowUp, Check, ChevronDown, Circle, Copy, Download, FolderOpen, Layers, LoaderCircle, Minus, Plus, Redo2, RefreshCw, Save, Sparkles, Square, Trash2, Type, Undo2, Upload, X, MousePointer2 } from 'lucide-react';
 import type { DesignElement, Project, Suggestion } from '../../types';
 import { clamp, componentPresets, createPreset, initialProject, isPresetId } from '../../document';
@@ -11,7 +11,8 @@ import { applyLayout, getAlignmentGuides } from '../../layout';
 import type { AlignmentGuide, LayoutAction } from '../../layout';
 import { resizeBounds, resizeDirections, resizeHitArea } from '../../resize';
 import type { ResizeDirection } from '../../resize';
-import { elementTag, elementStyles, projectCode } from '../../render';
+import { elementClass, elementTag, elementStyles, projectCode } from '../../render';
+import type { ProjectCode } from '../../render';
 import { CodePanel } from '../../CodePanel';
 import type { CopyPart } from '../../CodePanel';
 
@@ -19,11 +20,16 @@ import { useErrors } from '../../components/ErrorHandling';
 import { ScreenSettings } from '../../components/ScreenSettings';
 import { HtmlImportDialog } from '../../components/HtmlImportDialog';
 import type { HtmlImportResult } from '../../importHtml';
+import { sameElementContent, sameProjectContent } from './projectContent';
 type WorkspaceMode = 'design' | 'code' | 'preview';
 type TextDraft = { id: string; text: string };
 const presetMime = 'application/x-picasso-preset';
 
-type Gesture = { ids: string[]; direction?: ResizeDirection; startX: number; startY: number; scale: number; before: Project; element: DesignElement; pointerId: number; captureTarget: HTMLElement; collapseOnClick: string | null; moved: boolean };
+type Gesture = { ids: string[]; direction?: ResizeDirection; startX: number; startY: number; scale: number; before: Project; element: DesignElement; pointerId: number; captureTarget: HTMLElement; collapseOnClick: string | null; moved: boolean; clientX: number; clientY: number; altKey: boolean; pending: boolean; frame: number | null };
+type LayerActions = {
+  startGesture: (event: ReactPointerEvent<HTMLElement>, element: DesignElement, direction?: ResizeDirection) => void;
+  beginText: (element: DesignElement) => void;
+};
 type Proposal = { suggestion: Suggestion; revision: number; requestId: number };
 type Health = { state: 'checking' | 'configured' | 'unconfigured' | 'unavailable'; model: string; message?: string };
 
@@ -73,12 +79,31 @@ function ColorField({ label, value, onChange }: { label: string; value: string; 
   return <label className="field color-field"><span>{label}</span><div><input type="color" aria-label={label} value={draft} onChange={event => setDraft(event.target.value.toUpperCase())} onBlur={() => { if (draft !== value) onChange(draft); }} /><span>{draft.toUpperCase()}</span></div></label>;
 }
 
-function ElementView({ element }: { element: DesignElement }) {
+const ElementView = memo(function ElementView({ element, local = false }: { element: DesignElement; local?: boolean }) {
   const Tag = elementTag(element);
-  return <Tag className={`design-element ${element.type}`} style={elementStyles(element)} {...(Tag === 'button' ? { type: 'button' as const, tabIndex: -1 } : {})}>{element.type !== 'rectangle' && element.text}</Tag>;
-}
+  const style = elementStyles(element);
+  if (local) { style.left = 0; style.top = 0; }
+  return <Tag className={`design-element ${element.type}`} style={style} {...(Tag === 'button' ? { type: 'button' as const, tabIndex: -1 } : {})}>{element.type !== 'rectangle' && element.text}</Tag>;
+});
 
-export default function EditorPage({ active, ref, onSessionChange }: EditorPageProps) {
+function stopLayerDoubleClick(event: ReactMouseEvent) { event.stopPropagation(); }
+
+const CanvasLayer = memo(function CanvasLayer({ element, selected, scale, actions }: {
+  element: DesignElement; selected: boolean; scale: number; actions: RefObject<LayerActions>;
+}) {
+  const hit = resizeHitArea(element.width, element.height, scale);
+  const move = useCallback((event: ReactPointerEvent<HTMLElement>) => actions.current.startGesture(event, element), [actions, element]);
+  const resize = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    actions.current.startGesture(event, element, event.currentTarget.dataset.direction as ResizeDirection);
+  }, [actions, element]);
+  const edit = useCallback((event: ReactMouseEvent) => { event.stopPropagation(); actions.current.beginText(element); }, [actions, element]);
+  return <div className={`element-hit-area element-resize-target${selected ? ' element-resize-selected' : ''}`} style={{ left: element.x, top: element.y, width: element.width, height: element.height, '--element-resize-x': `${hit.x}px`, '--element-resize-y': `${hit.y}px`, '--element-resize-stroke': `${1 / scale}px` } as CSSProperties} onPointerDown={move} onDoubleClick={edit} aria-label={`${element.name || element.type}, drag interior to move, edge or corner to resize${element.type !== 'rectangle' ? ', double-click interior to edit text' : ''}`}>
+    <ElementView element={element} local />
+    {resizeDirections.map(({ direction, label }) => <button key={direction} type="button" className="element-resize-zone" data-direction={direction} tabIndex={selected ? 0 : -1} aria-label={`Resize ${element.name || element.type} from ${label}`} title={`Drag ${label} to resize · Escape cancels`} onPointerDown={resize} onDoubleClick={stopLayerDoubleClick} />)}
+  </div>;
+});
+
+export default memo(function EditorPage({ active, ref, onSessionChange }: EditorPageProps) {
   const { reportError } = useErrors();
   const activeRef = useRef(active);
   activeRef.current = active;
@@ -86,6 +111,8 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
   const projectRef = useRef(project);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [guidesEnabled, setGuidesEnabled] = useState(true);
+  const guidesEnabledRef = useRef(guidesEnabled);
+  guidesEnabledRef.current = guidesEnabled;
   const [guides, setGuides] = useState<AlignmentGuide[]>([]);
   const [noticeState, setNoticeState] = useState({ message: 'Your space to make something good.', error: false });
   const notice = noticeState.message;
@@ -95,6 +122,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
     reportError({ title, message }, error);
   }
   const gestureRef = useRef<Gesture | null>(null);
+  const [gestureActive, setGestureActive] = useState(false);
   const [scale, setScale] = useState(0.75);
   const viewportRef = useRef<HTMLDivElement>(null);
   const boardAreaRef = useRef<HTMLDivElement>(null);
@@ -113,7 +141,12 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
   const importIdRef = useRef(0);
   const [history, setHistory] = useState<{ past: Project[]; future: Project[] }>({ past: [], future: [] });
   const historyRef = useRef(history);
-  const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null);
+  const [savedSnapshot, setSavedSnapshot] = useState<{ project: Project; serialized: string } | null>(null);
+  const codeCacheRef = useRef<{ project: Project; code: ProjectCode } | null>(null);
+  // Memoized layers keep this ref, while events always reach the latest editor closures.
+  const layerActionsRef = useRef<LayerActions>({ startGesture, beginText });
+  layerActionsRef.current.startGesture = startGesture;
+  layerActionsRef.current.beginText = beginText;
   const importRef = useRef<HTMLInputElement>(null);
   const [htmlImportOpen, setHtmlImportOpen] = useState(false);
   const htmlImportRevisionRef = useRef(0);
@@ -148,14 +181,13 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
   instructionRef.current = instruction;
   const healthRef = useRef(health);
   healthRef.current = health;
-  const serialized = useMemo(() => JSON.stringify(project), [project]);
-  const saved = savedSnapshot === serialized;
-  useEffect(() => { onSessionChange({ project: gestureRef.current?.before ?? project, saved: !gestureRef.current && saved }); }, [project, saved, history, onSessionChange]);
+  const saved = savedSnapshot !== null && sameProjectContent(savedSnapshot.project, project);
+  useEffect(() => { onSessionChange({ project: gestureRef.current?.before ?? project, saved: !gestureRef.current && saved }); }, [project, saved, history, gestureActive, onSessionChange]);
   const selectedElements = project.elements.filter(element => selectedIds.includes(element.id));
   const selected = selectedElements.length === 1 ? selectedElements[0] : undefined;
   const selectedIndex = selected ? project.elements.findIndex(element => element.id === selected.id) : -1;
-  const code = useMemo(() => projectCode(project), [project]);
-  const selectedNode = selected ? code.nodes.find(node => node.elementId === selected.id) : undefined;
+  const code = mode === 'design' ? null : generatedCode(project);
+  const selectedSelector = selected ? `.picasso-root > .${elementClass(selectedIndex)}` : undefined;
   const editingElement = textDraft ? project.elements.find(element => element.id === textDraft.id) : undefined;
   const { committedById, proposalChanges, proposalRemovals } = useMemo(() => {
     if (!proposal) return { committedById: null, proposalChanges: [], proposalRemovals: [] };
@@ -165,13 +197,20 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
       committedById,
       proposalChanges: proposal.suggestion.elements.filter((element, index) => {
         const committed = committedById.get(element.id);
-        return !committed || committed.index !== index || (Object.keys(element) as (keyof DesignElement)[]).some(key => element[key] !== committed.element[key]);
+        return !committed || committed.index !== index || !sameElementContent(element, committed.element);
       }),
       proposalRemovals: project.elements.filter(element => !proposedIds.has(element.id)),
     };
   }, [project.elements, proposal]);
   const removedCount = proposalRemovals.length;
   const previewScale = Math.min(180 / project.width, 112 / project.height);
+  function generatedCode(current: Project): ProjectCode {
+    const cached = codeCacheRef.current;
+    if (cached?.project === current) return cached.code;
+    const generated = projectCode(current);
+    codeCacheRef.current = { project: current, code: generated };
+    return generated;
+  }
 
   function clearAutoSchedule() {
     if (autoTimerRef.current !== null) window.clearTimeout(autoTimerRef.current);
@@ -263,14 +302,16 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
   }
 
   function publish(next: Project, switchingDocument = false) {
-    if (!switchingDocument && JSON.stringify(next) === JSON.stringify(projectRef.current)) return;
+    if (!switchingDocument && sameProjectContent(next, projectRef.current)) return false;
     setCopyRecovery(null);
     const hadProposal = Boolean(proposalRef.current || requestControllerRef.current);
     revisionRef.current += 1;
     clearAutoSchedule();
     if (hadProposal || switchingDocument) invalidateAI(hadProposal ? 'The design changed. A fresh suggestion will use the new version.' : '');
+    codeCacheRef.current = null;
     projectRef.current = next;
     setProject(next);
+    return true;
   }
 
   function record(before: Project) {
@@ -280,9 +321,9 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
   }
 
   function commit(next: Project, eligibleForAI = true) {
-    if (JSON.stringify(next) === JSON.stringify(projectRef.current)) return;
-    record(projectRef.current);
-    publish(next);
+    const before = projectRef.current;
+    if (!publish(next)) return;
+    record(before);
     if (eligibleForAI) scheduleAutoSuggestion();
   }
 
@@ -342,7 +383,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
     const label = part === 'document' ? 'full page' : part.replace('-', ' ');
     try {
       resolveDrafts();
-      const generated = projectCode(projectRef.current);
+      const generated = generatedCode(gestureRef.current?.before ?? projectRef.current);
       const node = generated.nodes.find(entry => entry.elementId === selectedIds[0]);
       text = part === 'node-html' ? node?.html : part === 'node-css' ? node?.css : generated[part];
     } catch (error) {
@@ -510,9 +551,10 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
   function saveLocal() {
     try {
       resolveDrafts();
-      const snapshot = JSON.stringify(projectRef.current);
+      const current = gestureRef.current?.before ?? projectRef.current;
+      const snapshot = savedSnapshot && sameProjectContent(savedSnapshot.project, current) ? savedSnapshot.serialized : JSON.stringify(current);
       localStorage.setItem('picasso.project.v1', snapshot);
-      setSavedSnapshot(snapshot);
+      setSavedSnapshot({ project: current, serialized: snapshot });
       setNotice('Saved to this browser. Use Open saved to return to it.');
     } catch (error) {
       failOperation('Could not save project', 'Browser storage is unavailable or full. Export JSON to keep a copy of your work.', error);
@@ -520,12 +562,12 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
   }
 
   function replaceDocument(next: Project) {
+    if (gestureRef.current) finishGesture(true);
     resolveDrafts();
     setCopyRecovery(null);
     clearReference();
     dragPresetRef.current = null;
     setDragOver(false);
-    gestureRef.current = null;
     publish(next, true);
     const empty = { past: [], future: [] };
     historyRef.current = empty;
@@ -537,7 +579,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
   function confirmReplacement() {
     if (gestureRef.current) finishGesture(true);
     resolveDrafts();
-    return savedSnapshot === JSON.stringify(projectRef.current) || window.confirm('Replace your current unsaved design? Cancel to return to it and save locally or export JSON first.');
+    return (savedSnapshot !== null && sameProjectContent(savedSnapshot.project, projectRef.current)) || window.confirm('Replace your current unsaved design? Cancel to return to it and save locally or export JSON first.');
   }
 
   useImperativeHandle(ref, () => ({
@@ -578,7 +620,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
       const next = parseProject(JSON.parse(stored));
       if (!confirmReplacement()) return 'Opening cancelled. Your current design is unchanged.';
       replaceDocument(next);
-      setSavedSnapshot(JSON.stringify(next));
+      setSavedSnapshot({ project: next, serialized: JSON.stringify(next) });
       setNotice('Saved project opened. You’re right where you left off.');
       return null;
     } catch (error) {
@@ -661,9 +703,9 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
   function exportProject(format: 'json' | 'svg' | 'html') {
     try {
       resolveDrafts();
-      const current = projectRef.current;
+      const current = gestureRef.current?.before ?? projectRef.current;
       const filename = current.name.replace(/[^a-zA-Z0-9_-]+/g, '-').slice(0, 80) || 'picasso-project';
-      const contents = format === 'json' ? JSON.stringify(current, null, 2) : format === 'html' ? projectCode(current).document : projectSvg(current);
+      const contents = format === 'json' ? JSON.stringify(current, null, 2) : format === 'html' ? generatedCode(current).document : projectSvg(current);
       download(contents, `${filename}.${format}`, format === 'json' ? 'application/json' : format === 'html' ? 'text/html' : 'image/svg+xml');
       setNotice(`${format.toUpperCase()} download prepared. Only your committed design is included.`);
     } catch (error) {
@@ -727,24 +769,44 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
     clearAutoSchedule();
     eligibleRevisionRef.current = pendingRevision;
     setSelectedIds(ids);
-    gestureRef.current = { ids, direction, startX: event.clientX, startY: event.clientY, scale, before: projectRef.current, element: mode === 'move' ? bounds : current, pointerId: event.pointerId, captureTarget: event.currentTarget, collapseOnClick: ids.length > 1 ? current.id : null, moved: false };
+    gestureRef.current = { ids, direction, startX: event.clientX, startY: event.clientY, scale, before: projectRef.current, element: mode === 'move' ? bounds : current, pointerId: event.pointerId, captureTarget: event.currentTarget, collapseOnClick: ids.length > 1 ? current.id : null, moved: false, clientX: event.clientX, clientY: event.clientY, altKey: event.altKey, pending: false, frame: null };
+    setGestureActive(true);
+  }
+
+  function updateGesturePointer(gesture: Gesture, event: ReactPointerEvent) {
+    if (gesture.clientX === event.clientX && gesture.clientY === event.clientY && gesture.altKey === event.altKey) return;
+    gesture.clientX = event.clientX;
+    gesture.clientY = event.clientY;
+    gesture.altKey = event.altKey;
+    gesture.pending = true;
+    if (!gesture.moved && Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) >= 2) gesture.moved = true;
   }
 
   function moveGesture(event: ReactPointerEvent) {
     const gesture = gestureRef.current;
     if (!gesture || event.pointerId !== gesture.pointerId) return;
-    const dx = (event.clientX - gesture.startX) / gesture.scale;
-    const dy = (event.clientY - gesture.startY) / gesture.scale;
-    if (!gesture.moved && Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) < 2) return;
-    gesture.moved = true;
+    updateGesturePointer(gesture, event);
+    if (!gesture.moved || !gesture.pending || gesture.frame !== null) return;
+    gesture.frame = window.requestAnimationFrame(() => {
+      gesture.frame = null;
+      if (gestureRef.current !== gesture || !gesture.pending) return;
+      gesture.pending = false;
+      applyGesture(gesture);
+    });
+  }
+
+  function applyGesture(gesture: Gesture) {
+    if (!gesture.moved) return;
+    const dx = (gesture.clientX - gesture.startX) / gesture.scale;
+    const dy = (gesture.clientY - gesture.startY) / gesture.scale;
     if (gesture.direction) {
       const bounds = resizeBounds(gesture.element, gesture.direction, dx, dy);
       publish({ ...gesture.before, elements: gesture.before.elements.map(element => element.id === gesture.ids[0] ? { ...element, ...bounds } : element) });
       return;
     }
     const subject = { ...gesture.element, x: Math.round(gesture.element.x + dx), y: Math.round(gesture.element.y + dy) };
-    const result = guidesEnabled && !event.altKey
-      ? getAlignmentGuides({ ...gesture.before, elements: gesture.before.elements.filter(element => !gesture.ids.includes(element.id)) }, subject, 6 / scale)
+    const result = guidesEnabledRef.current && !gesture.altKey
+      ? getAlignmentGuides({ ...gesture.before, elements: gesture.before.elements.filter(element => !gesture.ids.includes(element.id)) }, subject, 6 / gesture.scale)
       : { x: subject.x, y: subject.y, guides: [] };
     const members = gesture.before.elements.filter(element => gesture.ids.includes(element.id));
     const offsetX = clamp(result.x - gesture.element.x, Math.max(...members.map(element => -4000 - element.x)), Math.min(...members.map(element => 8000 - element.x)));
@@ -753,18 +815,37 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
     publish({ ...gesture.before, elements: gesture.before.elements.map(element => gesture.ids.includes(element.id) ? { ...element, x: element.x + offsetX, y: element.y + offsetY } : element) });
   }
 
-  function finishGesture(cancel = false) {
+  function discardGestureFrame(gesture: Gesture) {
+    if (gesture.frame !== null) window.cancelAnimationFrame(gesture.frame);
+    gesture.frame = null;
+    gesture.pending = false;
+  }
+
+  function finishGesture(cancel = false, event?: ReactPointerEvent) {
     const gesture = gestureRef.current;
     if (!gesture) return;
+    // Pointerup can arrive before the scheduled frame, or carry a newer final
+    // coordinate. Apply it synchronously before deciding whether to record undo.
+    if (!cancel) {
+      if (event) updateGesturePointer(gesture, event);
+      if (gesture.pending) applyGesture(gesture);
+    }
+    discardGestureFrame(gesture);
     gestureRef.current = null;
+    setGestureActive(false);
     if (gesture.captureTarget.hasPointerCapture(gesture.pointerId)) gesture.captureTarget.releasePointerCapture(gesture.pointerId);
     setGuides([]);
     if (cancel) {
       publish(gesture.before);
       if (eligibleRevisionRef.current === revisionRef.current) scheduleAutoSuggestion();
     }
-    else if (JSON.stringify(gesture.before) !== JSON.stringify(projectRef.current)) { record(gesture.before); scheduleAutoSuggestion(); }
+    else if (!sameProjectContent(gesture.before, projectRef.current)) { record(gesture.before); scheduleAutoSuggestion(); }
     else {
+      // Returning to the original geometry is not a new document or undo entry.
+      if (projectRef.current !== gesture.before) {
+        projectRef.current = gesture.before;
+        setProject(gesture.before);
+      }
       if (gesture.collapseOnClick && !gesture.moved) setSelectedIds([gesture.collapseOnClick]);
       if (eligibleRevisionRef.current === revisionRef.current) scheduleAutoSuggestion();
     }
@@ -801,7 +882,10 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
 
   useEffect(() => {
     const invalidateImportOnNavigation = (event: HashChangeEvent) => {
-      if (new URL(event.newURL).hash !== '#/editor') importIdRef.current += 1;
+      if (new URL(event.newURL).hash !== '#/editor') {
+        importIdRef.current += 1;
+        if (gestureRef.current) finishGesture(true);
+      }
     };
     window.addEventListener('hashchange', invalidateImportOnNavigation);
     void checkHealth();
@@ -809,6 +893,13 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
       window.removeEventListener('hashchange', invalidateImportOnNavigation);
       importIdRef.current += 1;
       copyIdRef.current += 1;
+      const gesture = gestureRef.current;
+      if (gesture) {
+        discardGestureFrame(gesture);
+        gestureRef.current = null;
+        projectRef.current = gesture.before;
+        if (gesture.captureTarget.hasPointerCapture(gesture.pointerId)) gesture.captureTarget.releasePointerCapture(gesture.pointerId);
+      }
       referenceControllerRef.current?.abort();
       referenceControllerRef.current = null;
       if (autoTimerRef.current !== null) window.clearTimeout(autoTimerRef.current);
@@ -1023,18 +1114,11 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
         <div ref={viewportRef} className="canvas-scroll" onPointerDown={event => { if (event.target === event.currentTarget || event.target === boardAreaRef.current) { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); setSelectedIds([]); } }}>
           <div ref={boardAreaRef} className="artboard-area"><div className="artboard-label"><span>{project.name || 'Untitled project'} · COMMITTED DESIGN</span><span>{project.width} × {project.height}</span></div>
             <div className="artboard-frame" style={{ width: project.width * scale, height: project.height * scale }}>
-              <div ref={artboardRef} tabIndex={0} aria-label="Design artboard. Drag a layer interior to move, or an edge or corner to resize. Select a layer, then use arrows to move by one pixel or Shift arrows for ten." className={`artboard ${dragOver ? 'is-drop-target' : ''}`} style={{ width: project.width, height: project.height, background: project.background, transform: `scale(${scale})` }} onDragEnter={event => { if (acceptsPreset(event)) { event.preventDefault(); setDragOver(true); } }} onDragOver={event => { if (acceptsPreset(event)) { event.preventDefault(); event.dataTransfer.dropEffect = projectRef.current.elements.length >= 200 ? 'none' : 'copy'; setDragOver(true); } }} onDragLeave={event => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragOver(false); }} onDrop={dropPreset} onPointerDown={event => { if (event.target === event.currentTarget) { resolveDrafts(); setSelectedIds([]); } }} onPointerMove={moveGesture} onPointerUp={event => { if (event.pointerId === gestureRef.current?.pointerId) finishGesture(); }} onPointerCancel={event => { if (event.pointerId === gestureRef.current?.pointerId) finishGesture(true); }} onLostPointerCapture={event => { if (event.pointerId === gestureRef.current?.pointerId) finishGesture(true); }}>
-                {project.elements.map(element => {
-                  const hit = resizeHitArea(element.width, element.height, scale);
-                  const isSelected = selectedIds.includes(element.id);
-                  return <div className={`element-hit-area element-resize-target${isSelected ? ' element-resize-selected' : ''}`} key={element.id} style={{ left: element.x, top: element.y, width: element.width, height: element.height, '--element-resize-x': `${hit.x}px`, '--element-resize-y': `${hit.y}px`, '--element-resize-stroke': `${1 / scale}px` } as CSSProperties} onPointerDown={event => startGesture(event, element)} onDoubleClick={event => { event.stopPropagation(); beginText(element); }} aria-label={`${element.name || element.type}, drag interior to move, edge or corner to resize${element.type !== 'rectangle' ? ', double-click interior to edit text' : ''}`}>
-                    <ElementView element={{ ...element, x: 0, y: 0 }} />
-                    {resizeDirections.map(({ direction, label }) => <button key={direction} type="button" className="element-resize-zone" data-direction={direction} tabIndex={isSelected ? 0 : -1} aria-label={`Resize ${element.name || element.type} from ${label}`} title={`Drag ${label} to resize · Escape cancels`} onPointerDown={event => startGesture(event, element, direction)} onDoubleClick={event => event.stopPropagation()} />)}
-                  </div>;
-                })}
+              <div ref={artboardRef} tabIndex={0} aria-label="Design artboard. Drag a layer interior to move, or an edge or corner to resize. Select a layer, then use arrows to move by one pixel or Shift arrows for ten." className={`artboard ${dragOver ? 'is-drop-target' : ''}`} style={{ width: project.width, height: project.height, background: project.background, transform: `scale(${scale})` }} onDragEnter={event => { if (acceptsPreset(event)) { event.preventDefault(); setDragOver(true); } }} onDragOver={event => { if (acceptsPreset(event)) { event.preventDefault(); event.dataTransfer.dropEffect = projectRef.current.elements.length >= 200 ? 'none' : 'copy'; setDragOver(true); } }} onDragLeave={event => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setDragOver(false); }} onDrop={dropPreset} onPointerDown={event => { if (event.target === event.currentTarget) { resolveDrafts(); setSelectedIds([]); } }} onPointerMove={moveGesture} onPointerUp={event => { if (event.pointerId === gestureRef.current?.pointerId) finishGesture(false, event); }} onPointerCancel={event => { if (event.pointerId === gestureRef.current?.pointerId) finishGesture(true); }} onLostPointerCapture={event => { if (event.pointerId === gestureRef.current?.pointerId) finishGesture(true); }}>
+                {project.elements.map(element => <CanvasLayer key={element.id} element={element} selected={selectedIds.includes(element.id)} scale={scale} actions={layerActionsRef} />)}
                 {proposal && !showOriginal && <>
                   {proposalChanges.map(element => <div key={`proposal-${element.id}`} className="canvas-proposal-ghost" aria-label={`Proposed ${committedById!.has(element.id) ? 'change' : 'addition'}: ${element.name || element.type}, not applied`} style={{ left: element.x, top: element.y, width: element.width, height: element.height, outlineWidth: 1.5 / scale, borderRadius: element.borderRadius }}>
-                    <ElementView element={{ ...element, x: 0, y: 0 }} />
+                    <ElementView element={element} local />
                     <span className="canvas-proposal-badge" style={{ transform: `scale(${1 / scale})` }}>{committedById!.has(element.id) ? 'AI CHANGE' : 'AI ADDITION'} · NOT APPLIED</span>
                   </div>)}
                   {proposalRemovals.map(element => <div key={`removal-${element.id}`} className="canvas-proposal-removal" aria-label={`Proposed removal: ${element.name || element.type}, not applied`} style={{ left: element.x, top: element.y, width: element.width, height: element.height, outlineWidth: 1.5 / scale, borderRadius: element.borderRadius }}><span className="canvas-proposal-badge" style={{ transform: `scale(${1 / scale})` }}>AI REMOVAL · NOT APPLIED</span></div>)}
@@ -1063,8 +1147,8 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
           </div>
         </div>
         </>}
-        {mode === 'code' && <CodePanel project={project} code={code} selectedId={selected?.id} onSelect={id => id ? selectLayer(id) : setSelectedIds([])} onCopy={part => void copyCode(part)} />}
-        {mode === 'preview' && <section className="preview-workspace" aria-label="Generated page preview"><div className="preview-heading"><h2>Standalone page · committed design</h2><p>{project.width} × {project.height} CSS pixels. Scroll to reach the whole fixed-size page. Buttons have no application action.</p></div><div className="preview-scroll"><iframe title="Generated Picasso HTML page preview" sandbox="" srcDoc={code.document} width={project.width} height={project.height} /></div></section>}
+        {mode === 'code' && code && <CodePanel project={project} code={code} selectedId={selected?.id} onSelect={id => id ? selectLayer(id) : setSelectedIds([])} onCopy={part => void copyCode(part)} />}
+        {mode === 'preview' && code && <section className="preview-workspace" aria-label="Generated page preview"><div className="preview-heading"><h2>Standalone page · committed design</h2><p>{project.width} × {project.height} CSS pixels. Scroll to reach the whole fixed-size page. Buttons have no application action.</p></div><div className="preview-scroll"><iframe title="Generated Picasso HTML page preview" sandbox="" srcDoc={code.document} width={project.width} height={project.height} /></div></section>}
         <footer className="canvas-footer"><span className={`operation-notice${noticeState.error ? ' is-error' : ''}`} role="status" aria-live="polite">{noticeState.error ? <AlertCircle size={13} aria-hidden="true" /> : <Check size={13} aria-hidden="true" />} {notice}</span>{mode === 'design' && <div className="zoom-controls"><button className="fit-button" onClick={fitToView} aria-label="Fit screen to view">Fit to view</button><button className="icon-button" aria-label="Zoom out" disabled={scale <= 0.02} onClick={() => setScale(current => clamp(Math.round((current - 0.25) * 100) / 100, 0.02, 2))}><Minus size={13} /></button><button className="zoom-reset" aria-label="Reset zoom to 100 percent" title="Reset to 100%" onClick={() => setScale(1)}>{Math.round(scale * 100)}%</button><button className="icon-button" aria-label="Zoom in" disabled={scale >= 2} onClick={() => setScale(current => clamp(Math.round((current + 0.25) * 100) / 100, 0.02, 2))}><Plus size={13} /></button></div>}</footer>
       </section>
 
@@ -1074,7 +1158,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
           {selected ? <div key={selected.id}>
             <section className="inspector-section"><div className="section-heading"><h3>Selected element</h3><button className="icon-button" onClick={() => setSelectedIds([])} aria-label="Deselect element"><X size={15} /></button></div>
               <Field label="Layer name" value={selected.name} onCommit={name => patchElement({ name })} />
-              <p className="node-correspondence">&lt;{elementTag(selected)}&gt; <code>{selectedNode?.selector}</code></p>
+              <p className="node-correspondence">&lt;{elementTag(selected)}&gt; <code>{selectedSelector}</code></p>
               <button className="inspect-code-button" onClick={() => changeMode('code')}>Inspect generated HTML / CSS</button>
             </section>
             <section className="inspector-section"><h3>Position & size</h3><div className="field-grid">
@@ -1094,4 +1178,4 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
     </div>
     {active && htmlImportOpen && <HtmlImportDialog width={project.width} height={project.height} onImport={adoptHtmlImport} onClose={() => setHtmlImportOpen(false)} />}
   </div>;
-}
+});

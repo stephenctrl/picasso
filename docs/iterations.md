@@ -385,3 +385,25 @@ Output is deliberately **flat, fixed-size and absolutely positioned**, not respo
 - Delayed file reads could not overwrite newer pasted input or replace a design after navigation. Changing inputs invalidated preparation; invalid dimensions and Escape preserved the current design. Screenshots checked dark desktop preparation and light 1024 × 768 import/Preview surfaces.
 - Runtime repairs switched computed-style queries to the parent window and kept mixed inline prose together while warning about normalized styling. The final four-layer card rendered “Editable nested copy.” with its spaces intact; a background-styled inline span also retained surrounding whitespace. Final `npm run build` passed; `npm test` passed all **89 tests**.
 - Limits: static, fixed-size, opaque, flat compositions only. Images, web fonts, application behavior, responsive relationships, and unsupported effects are omitted or approximated with warnings. Verification used Chromium development serving, not a production-server, cross-browser, exhaustive accessibility, or performance audit. Browser smoke fixtures and diagnostic logging were not retained in source.
+
+## Interaction performance and smoothing — 2026-11-05
+
+- Reviewed the editor’s CPU path before GPU work. Design mode eagerly generated full HTML/CSS on every geometry change; project comparisons repeatedly serialized entire documents; unrelated selection/state changes reconstructed all canvas layer children. Pointer events published document state individually.
+- Made code generation demand-driven with a single-project cache shared by Code, Preview, copy, and HTML export. Added allocation-free fixed-schema content comparisons, memoized canvas layers/editor, and identity-deduplicated session/recovery updates. Pointer changes coalesce to one pending animation frame; pointerup applies the newest coordinates synchronously, while cancellation/navigation/unmount discard pending frames.
+- Added 100ms color/opacity feedback on UI controls and 120ms popover/dialog entrance effects. Active feedback is immediate, artwork geometry has no CSS transition, and reduced-motion disables the new transitions/entrance animations. No global smooth scrolling, blanket GPU promotion, dependencies, or explicit GPU runtime was added.
+- Created root [TODO.md](../TODO.md) with primary-source references and profiling-gated compositor, worker/OffscreenCanvas, WebGPU, and WebGL2 options, capability/loss fallbacks, readback/power costs, and compatibility/acceptance criteria.
+
+### Production browser comparison
+
+Same managed Chromium session, 1440 × 1000 viewport, 199-layer fixed fixture, production serving, and 12 Add → Undo → alternating-selection cycles before/after. Timings are in-page click-to-double-requestAnimationFrame proxies, not hardware presentation latency. Each table cell is median / p95 milliseconds; p95 here is the largest of only 12 samples.
+
+| Interaction | Before (ms) | After (ms) |
+| --- | ---: | ---: |
+| Add layer (199 → 200) | 99.9 / 155.5 | 70.3 / 89.3 |
+| Undo | 97.0 / 119.4 | 76.7 / 93.2 |
+| Select layer | 80.9 / 98.6 | 74.2 / 85.3 |
+
+- Project JSON serialization fell from 120 to 24 calls across the same cycles. A burst of 100 synthetic pointermove events after trusted pointerdown took 73.3ms dispatch work before versus 16.6ms afterward; project serialization during the burst fell from 196 calls to zero. This isolates high-rate event overhead, not an end-to-end FPS measurement. Native pointer release/reset completed both probes; the optimized release used the final pointer coordinates.
+- Correctness smoke exercised a queued move followed immediately by a newer pointerup, exact final geometry, one-step undo restoring saved state, all eight resize directions, pointercancel/lost capture, Escape after a rendered move, movement back to original content without undo, multiselect translation, guide snapping/Alt bypass, 100%/75% zoom, and navigation with queued work.
+- Generated Code and sandboxed Preview reflected edits after a prior cached generation. An HTML export requested during a transient x=140 drag included committed x=100, excluded transient geometry, and retained the latest committed text. Computed styles confirmed artwork transitions at 0s; reduced-motion gave controls 0s transitions and no menu/dialog entrance animation. The import dialog was visually inspected.
+- `npm run build` passed; `npm test` passed all **93 tests**, including four fixed-schema equality boundary tests. No live AI provider request, real-GPU acceleration, cross-browser/power matrix, exhaustive accessibility audit, or completed filesystem download assertion was performed. Measurements are single-environment samples without a controlled warmup/statistical repeat protocol; do not generalize them into universal latency/FPS guarantees.
