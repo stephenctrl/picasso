@@ -1,6 +1,6 @@
 # Picasso
 
-A local React/Express visual design editor with optional AI design review. Arrange panels, text, and buttons; export HTML, SVG, or editable project JSON.
+A local React/Express visual design editor with optional AI design review. Arrange panels, text, and buttons; import HTML/CSS into editable designs; export HTML, SVG, or editable project JSON.
 
 ## Run
 
@@ -27,6 +27,8 @@ Restart after changing `.env`; set `PORT` there to change the port. The server i
 - Choose **System / Light / Dark** for the interface; artwork and export colors stay unchanged.
 - Open **AI design partner**, describe a revision direction, and optionally attach a PNG/JPEG/WebP reference (up to 5 MiB, resized to a maximum 1600px edge). Review the preview and rationale, then **Accept** or **Dismiss**. Accepted changes can be undone.
 - **Save locally** replaces one browser-local saved slot. Reopen with **Open saved project**; export/import project JSON for portable backups. Reloading does not save or restore your work.
+- **Open → Import HTML / CSS** accepts pasted HTML, an HTML file, and optional separate CSS text or files. Set the layout viewport, choose **Prepare design**, review the converted preview and warnings, then **Import design**. Unsaved replacement requires confirmation. Imported layers can be edited, saved, and exported like any other design, including re-importing Picasso’s standalone HTML or paired HTML/CSS output.
+- HTML import is local and static: scripts, event handlers, navigation, and external resources are blocked. Nested/flex/grid layouts become at most 200 independent layers at one viewport. Images, web fonts, responsive relationships, and application behavior are not retained; typography, transparency, and unsupported effects may be approximated or omitted. The preview shows the converted design, not the original website. Each source is limited to 1,000,000 characters; unrepresentable layer sizes, text lengths, or layer counts fail without adopting a partial design.
 - **Code**, **Preview**, and HTML/SVG exports use the committed design. Output is fixed-size and absolutely positioned—not responsive, nested, or a functioning application.
 
 ## Privacy

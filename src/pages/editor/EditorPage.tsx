@@ -17,6 +17,8 @@ import type { CopyPart } from '../../CodePanel';
 
 import { useErrors } from '../../components/ErrorHandling';
 import { ScreenSettings } from '../../components/ScreenSettings';
+import { HtmlImportDialog } from '../../components/HtmlImportDialog';
+import type { HtmlImportResult } from '../../importHtml';
 type WorkspaceMode = 'design' | 'code' | 'preview';
 type TextDraft = { id: string; text: string };
 const presetMime = 'application/x-picasso-preset';
@@ -113,6 +115,8 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
   const historyRef = useRef(history);
   const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
+  const [htmlImportOpen, setHtmlImportOpen] = useState(false);
+  const htmlImportRevisionRef = useRef(0);
   const [health, setHealth] = useState<Health>({ state: 'checking', model: '' });
   const healthControllerRef = useRef<AbortController | null>(null);
   const [instruction, setInstruction] = useState('');
@@ -552,6 +556,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
   useEffect(() => {
     if (active) return;
     importIdRef.current += 1;
+    setHtmlImportOpen(false);
     if (referenceControllerRef.current) clearReference();
     if (gestureRef.current) finishGesture(true);
     resolveDrafts();
@@ -630,6 +635,29 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
     }
   }
 
+  function openHtmlImport(event: React.MouseEvent<HTMLButtonElement>) {
+    resolveDrafts();
+    if (gestureRef.current) finishGesture(true);
+    importIdRef.current += 1;
+    htmlImportRevisionRef.current = revisionRef.current;
+    setHtmlImportOpen(true);
+    event.currentTarget.closest('details')?.removeAttribute('open');
+  }
+
+  function adoptHtmlImport(result: HtmlImportResult): boolean {
+    if (!activeRef.current || htmlImportRevisionRef.current !== revisionRef.current) {
+      setHtmlImportOpen(false);
+      setNoticeState({ message: 'HTML import cancelled because the current design changed. Open Import HTML / CSS again to try with the latest design.', error: true });
+      return false;
+    }
+    if (!confirmReplacement()) return false;
+    replaceDocument(result.project);
+    setSavedSnapshot(null);
+    setMode('design');
+    setNotice(`Imported “${result.project.name}” as ${result.project.elements.length} editable layers. ${result.warnings.length ? 'Conversion notes were shown before import. ' : ''}Save locally or export HTML, SVG, or project JSON.`);
+    return true;
+  }
+
   function exportProject(format: 'json' | 'svg' | 'html') {
     try {
       resolveDrafts();
@@ -649,7 +677,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       const target = event.target;
       if (event.key === 'Escape' && gestureRef.current && !event.isComposing) { event.preventDefault(); finishGesture(true); return; }
-      if (gestureRef.current || textDraftRef.current || event.isComposing || (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable]'))) return;
+      if (htmlImportOpen || gestureRef.current || textDraftRef.current || event.isComposing || (target instanceof HTMLElement && target.closest('input, textarea, select, [contenteditable]'))) return;
       const modifier = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
       const designFocus = mode === 'design' && target instanceof HTMLElement && Boolean(target.closest('.artboard, .layer-list') || target === document.body);
@@ -887,7 +915,7 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
       <div className="topbar-end">
         <span className={`save-state ${saved ? 'is-saved' : ''}`}><span />{saved ? 'Saved locally' : 'Unsaved changes'}</span>
         <div className="history-actions"><button className="icon-button" aria-label="Undo (Ctrl or Command Z)" title="Undo · Ctrl/⌘ Z" disabled={!history.past.length} onClick={() => travel('undo')}><Undo2 size={17} /></button><button className="icon-button" aria-label="Redo (Ctrl or Command Shift Z)" title="Redo · Ctrl/⌘ Shift Z" disabled={!history.future.length} onClick={() => travel('redo')}><Redo2 size={17} /></button></div>
-        <details className="file-menu"><summary><FolderOpen size={14} /> Open <ChevronDown size={12} /></summary><div className="menu-popover"><button onClick={loadLocal}><FolderOpen size={14} /> Open saved project</button><button onClick={() => { resolveDrafts(); importRef.current?.click(); }}><Upload size={14} /> Import project JSON</button></div></details>
+        <details className="file-menu"><summary><FolderOpen size={14} /> Open <ChevronDown size={12} /></summary><div className="menu-popover"><button onClick={loadLocal}><FolderOpen size={14} /> Open saved project</button><button onClick={() => { resolveDrafts(); importRef.current?.click(); }}><Upload size={14} /> Import project JSON</button><button onClick={openHtmlImport}><Upload size={14} /> Import HTML / CSS</button></div></details>
         <button className="save-button" onClick={saveLocal}><Save size={14} /> Save locally</button>
         <details className="file-menu"><summary><Download size={14} /> Export <ChevronDown size={12} /></summary><div className="menu-popover"><button onClick={() => exportProject('html')}><Download size={14} /> Standalone HTML page</button><button onClick={() => exportProject('json')}><Download size={14} /> Project JSON</button><button onClick={() => exportProject('svg')}><Download size={14} /> Design SVG</button></div></details>
         <input ref={importRef} className="visually-hidden" type="file" accept=".json,application/json" aria-label="Import Picasso project JSON" onChange={importProject} />
@@ -1064,5 +1092,6 @@ export default function EditorPage({ active, ref, onSessionChange }: EditorPageP
         <div className="inspector-footer"><span className="privacy-dot" /> Local-first. Always in your hands.</div>
       </aside>
     </div>
+    {active && htmlImportOpen && <HtmlImportDialog width={project.width} height={project.height} onImport={adoptHtmlImport} onClose={() => setHtmlImportOpen(false)} />}
   </div>;
 }
