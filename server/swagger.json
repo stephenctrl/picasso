@@ -1,0 +1,431 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Picasso API",
+    "description": "Local API for checking Picasso server configuration and requesting AI design suggestions.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "The origin serving the Picasso application"
+    }
+  ],
+  "tags": [
+    {
+      "name": "API",
+      "description": "Picasso local API endpoints"
+    }
+  ],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": [
+          "API"
+        ],
+        "summary": "Check server and AI configuration",
+        "description": "Reports that the local Picasso server is available and whether AI provider configuration is present. The configuration error field is omitted when configuration is valid. API requests are restricted to local hostnames and same-origin browser requests.",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "Server is available.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                },
+                "example": {
+                  "ok": true,
+                  "aiConfigured": false,
+                  "model": "gpt-5.4",
+                  "configurationScope": "local",
+                  "configurationError": "AI is not configured. Set OPENAI_API_KEY in the server .env file and restart Picasso. Your editor works without AI."
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/api/suggest": {
+      "post": {
+        "tags": [
+          "API"
+        ],
+        "summary": "Request an AI design suggestion",
+        "description": "Sends a project and optional raster images to the configured AI provider. A successful response contains replacement design elements and does not modify the canvas itself. Each optional image must be a PNG, JPEG, or WebP data URL no larger than 2 MiB when decoded. The complete JSON request body is limited to 8 MiB.",
+        "operationId": "createSuggestion",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuggestRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "AI suggestion generated and validated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SuggestResponse"
+                },
+                "example": {
+                  "suggestion": {
+                    "title": "Clearer visual hierarchy",
+                    "rationale": "Increase the heading prominence and align the supporting elements.",
+                    "elements": [
+                      {
+                        "id": "heading",
+                        "type": "text",
+                        "name": "Heading",
+                        "x": 20,
+                        "y": 20,
+                        "width": 280,
+                        "height": 60,
+                        "fill": "#ffffff",
+                        "text": "A design",
+                        "textColor": "#172033",
+                        "fontSize": 32,
+                        "borderRadius": 0
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid JSON body or request fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "413": {
+            "description": "Request body exceeds the 8 MiB limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported request body charset or content encoding.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The AI provider could not complete the suggestion request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "AI provider configuration is missing or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The AI request timed out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error while processing the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "Forbidden": {
+        "description": "Request hostname is not local, or browser request is cross-origin.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "aiConfigured",
+          "model",
+          "configurationScope"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "aiConfigured": {
+            "type": "boolean",
+            "description": "True when AI configuration has no detected configuration error."
+          },
+          "model": {
+            "type": "string",
+            "description": "Configured model name; defaults to gpt-5.4."
+          },
+          "configurationScope": {
+            "type": "string",
+            "const": "local"
+          },
+          "configurationError": {
+            "type": "string",
+            "description": "Actionable configuration error, present only when AI is not configured."
+          }
+        }
+      },
+      "SuggestRequest": {
+        "type": "object",
+        "required": [
+          "project",
+          "instruction"
+        ],
+        "properties": {
+          "project": {
+            "$ref": "#/components/schemas/Project"
+          },
+          "instruction": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "AI direction. An empty string requests an improvement while retaining design intent."
+          },
+          "canvasImage": {
+            "$ref": "#/components/schemas/ImageDataUrl",
+            "description": "Optional screenshot of the current canvas."
+          },
+          "referenceImage": {
+            "$ref": "#/components/schemas/ImageDataUrl",
+            "description": "Optional visual reference image."
+          }
+        }
+      },
+      "Project": {
+        "type": "object",
+        "required": [
+          "version",
+          "name",
+          "width",
+          "height",
+          "background",
+          "elements"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "const": 1
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "width": {
+            "type": "number",
+            "minimum": 240,
+            "maximum": 4000
+          },
+          "height": {
+            "type": "number",
+            "minimum": 240,
+            "maximum": 4000
+          },
+          "background": {
+            "$ref": "#/components/schemas/HexColor"
+          },
+          "elements": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/DesignElement"
+            },
+            "description": "Element IDs must be unique within the project."
+          }
+        }
+      },
+      "DesignElement": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "name",
+          "x",
+          "y",
+          "width",
+          "height",
+          "fill",
+          "text",
+          "textColor",
+          "fontSize",
+          "borderRadius"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "rectangle",
+              "text",
+              "button"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "x": {
+            "type": "number",
+            "minimum": -4000,
+            "maximum": 8000
+          },
+          "y": {
+            "type": "number",
+            "minimum": -4000,
+            "maximum": 8000
+          },
+          "width": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 4000
+          },
+          "height": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 4000
+          },
+          "fill": {
+            "$ref": "#/components/schemas/HexColor"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "textColor": {
+            "$ref": "#/components/schemas/HexColor"
+          },
+          "fontSize": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 300
+          },
+          "borderRadius": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2000
+          }
+        }
+      },
+      "Suggestion": {
+        "type": "object",
+        "required": [
+          "title",
+          "rationale",
+          "elements"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "rationale": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "elements": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/DesignElement"
+            },
+            "description": "Element IDs must be unique."
+          }
+        }
+      },
+      "SuggestResponse": {
+        "type": "object",
+        "required": [
+          "suggestion"
+        ],
+        "properties": {
+          "suggestion": {
+            "$ref": "#/components/schemas/Suggestion"
+          }
+        }
+      },
+      "ImageDataUrl": {
+        "type": "string",
+        "format": "uri",
+        "pattern": "^data:image/(png|jpeg|webp);base64,",
+        "description": "PNG, JPEG, or WebP data URL with valid base64 and matching image signature. Decoded image data must not exceed 2 MiB."
+      },
+      "HexColor": {
+        "type": "string",
+        "pattern": "^#[0-9a-fA-F]{6}$",
+        "description": "Six-digit hexadecimal color."
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
