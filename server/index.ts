@@ -10,6 +10,7 @@ import { AiError, aiConfiguration, suggest } from './ai';
 import { parseRequest } from './validation';
 import { handleRequestError } from './errors';
 import { parsePort, serverFailureMessage } from './startup';
+import swaggerSpec from './swagger.json';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const app = express();
@@ -28,6 +29,9 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json({ limit: '8mb' }));
+app.get('/api/openapi.json', (_req, res) => {
+  res.json(swaggerSpec);
+});
 app.get('/api/health', (_req, res) => {
   const config = aiConfiguration();
   res.json({

@@ -18,6 +18,31 @@
     }
   ],
   "paths": {
+    "/api/openapi.json": {
+      "get": {
+        "tags": [
+          "API"
+        ],
+        "summary": "Retrieve the OpenAPI specification",
+        "description": "Returns this machine-readable API description as JSON for compatible API clients and AI agents.",
+        "operationId": "getOpenApiSpecification",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 specification.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
     "/api/health": {
       "get": {
         "tags": [
